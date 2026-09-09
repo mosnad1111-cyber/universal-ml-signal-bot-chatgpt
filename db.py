@@ -35,7 +35,14 @@ class DB:
         with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='CLOSED',result=?,closed_at=?,close_price=? WHERE id=? AND status IN ('WAITING','ACTIVE')",(result,now,price,sid))
     def cancel(self,sid,result='NOT_SENT'):
         now=datetime.now(timezone.utc).isoformat()
-        with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='CANCELLED',result=?,closed_at=? WHERE id=? AND status='WAITING'",(result,now,sid))
+        with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='CANCELLED',result=?,closed_at=? WHERE id=? AND status IN ('WAITING','ACTIVE')",(result,now,sid))
+    def cancel_open_once(self,key='signal_delivery_fix_v1'):
+        with self.lock,self._conn() as c:
+            if c.execute('SELECT 1 FROM settings WHERE key=?',(key,)).fetchone(): return 0
+            now=datetime.now(timezone.utc).isoformat()
+            cur=c.execute("UPDATE signals SET status='CANCELLED',result='LEGACY_NOT_DELIVERED',closed_at=? WHERE status IN ('WAITING','ACTIVE')",(now,))
+            c.execute('INSERT INTO settings(key,value) VALUES(?,?)',(key,'1'))
+            return cur.rowcount
     def get_setting(self,key,default=None):
         with self.lock,self._conn() as c:
             r=c.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
