@@ -23,10 +23,20 @@ class DB:
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(s['symbol'],s['timeframe'],s['direction'],s['entry'],s['sl'],s['tp'],s['score'],s['ai_prob'],'WAITING',now,s['wave_key'],s['candle_time'],json.dumps(s.get('features',{}))))
                 return cur.lastrowid
             except sqlite3.IntegrityError:return None
+    def _legacy_cleanup(self):
+        with self._conn() as c:
+            if c.execute('SELECT 1 FROM settings WHERE key=?',('signal_delivery_fix_v1',)).fetchone(): return
+            now=datetime.now(timezone.utc).isoformat()
+            c.execute("UPDATE signals SET status='CANCELLED',result='LEGACY_NOT_DELIVERED',closed_at=? WHERE status IN ('WAITING','ACTIVE')",(now,))
+            c.execute('INSERT INTO settings(key,value) VALUES(?,?)',('signal_delivery_fix_v1','1'))
     def open_for(self,symbol,tf):
-        with self.lock,self._conn() as c:return c.execute("SELECT * FROM signals WHERE symbol=? AND timeframe=? AND status IN ('WAITING','ACTIVE') ORDER BY id DESC LIMIT 1",(symbol,tf)).fetchone()
+        with self.lock:
+            self._legacy_cleanup()
+            with self._conn() as c:return c.execute("SELECT * FROM signals WHERE symbol=? AND timeframe=? AND status IN ('WAITING','ACTIVE') ORDER BY id DESC LIMIT 1",(symbol,tf)).fetchone()
     def all_open(self):
-        with self.lock,self._conn() as c:return c.execute("SELECT * FROM signals WHERE status IN ('WAITING','ACTIVE') ORDER BY id").fetchall()
+        with self.lock:
+            self._legacy_cleanup()
+            with self._conn() as c:return c.execute("SELECT * FROM signals WHERE status IN ('WAITING','ACTIVE') ORDER BY id").fetchall()
     def activate(self,sid,price):
         now=datetime.now(timezone.utc).isoformat()
         with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='ACTIVE',activated_at=?,entry_time=? WHERE id=? AND status='WAITING'",(now,now,sid))
@@ -36,13 +46,6 @@ class DB:
     def cancel(self,sid,result='NOT_SENT'):
         now=datetime.now(timezone.utc).isoformat()
         with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='CANCELLED',result=?,closed_at=? WHERE id=? AND status IN ('WAITING','ACTIVE')",(result,now,sid))
-    def cancel_open_once(self,key='signal_delivery_fix_v1'):
-        with self.lock,self._conn() as c:
-            if c.execute('SELECT 1 FROM settings WHERE key=?',(key,)).fetchone(): return 0
-            now=datetime.now(timezone.utc).isoformat()
-            cur=c.execute("UPDATE signals SET status='CANCELLED',result='LEGACY_NOT_DELIVERED',closed_at=? WHERE status IN ('WAITING','ACTIVE')",(now,))
-            c.execute('INSERT INTO settings(key,value) VALUES(?,?)',(key,'1'))
-            return cur.rowcount
     def get_setting(self,key,default=None):
         with self.lock,self._conn() as c:
             r=c.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
