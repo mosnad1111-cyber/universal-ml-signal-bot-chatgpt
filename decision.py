@@ -7,40 +7,102 @@ def _round_price(v):
     return round(float(v), 2)
 
 
+def _clip01(v):
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _score_direction(r, direction, ai_prob, ctx):
-    bull = float(r['ema20']) > float(r['ema50']) > float(r['ema200'])
-    bear = float(r['ema20']) < float(r['ema50']) < float(r['ema200'])
-    momentum_up = float(r['macd_hist']) > 0 and float(r['rsi']) >= 52
-    momentum_dn = float(r['macd_hist']) < 0 and float(r['rsi']) <= 48
-    breakout_up = bool(r['breakout_up'])
-    breakout_dn = bool(r['breakout_dn'])
-    candle_up = float(r['Close']) > float(r['Open'])
-    candle_dn = float(r['Close']) < float(r['Open'])
-    vol_ok = pd.isna(r['vol_ratio']) or float(r['vol_ratio']) >= 0.75
+    """Continuous 100-point quality score.
+
+    The old engine awarded most technical points only when several binary
+    conditions were simultaneously true. That made valid setups score in the
+    30-40 range and effectively silenced the scanner. This version measures
+    the strength of each condition continuously while keeping AI as a
+    ranking component rather than a hard gate.
+    """
+    close = float(r['Close'])
+    open_ = float(r['Open'])
+    high = float(r['High'])
+    low = float(r['Low'])
+    atr = max(float(r['atr']), 1e-12)
+    ema20 = float(r['ema20'])
+    ema50 = float(r['ema50'])
+    ema200 = float(r['ema200'])
+    rsi = float(r['rsi'])
+    macd_hist = float(r['macd_hist'])
     trend_ctx = int(ctx.get('trend', 0))
-    score = 0.0
+
+    # 20 pts: trend structure + distance between the fast/medium averages.
+    trend_span = max(abs(ema50 - ema200), atr * 0.25)
     if direction == 'BUY':
-        score += 20 if bull else 0
-        score += 14 if momentum_up else 0
-        score += 14 if breakout_up else 0
-        score += 7 if candle_up else 0
-        score += 7 if vol_ok else 0
-        score += 8 if float(r['Close']) > float(r['ema20']) else 0
-        score += 8 if trend_ctx > 0 else 0
+        structure = 1.0 if ema20 > ema50 > ema200 else (0.65 if ema20 > ema50 else 0.25)
+        trend_strength = _clip01(abs(ema20 - ema50) / trend_span)
     else:
-        score += 20 if bear else 0
-        score += 14 if momentum_dn else 0
-        score += 14 if breakout_dn else 0
-        score += 7 if candle_dn else 0
-        score += 7 if vol_ok else 0
-        score += 8 if float(r['Close']) < float(r['ema20']) else 0
-        score += 8 if trend_ctx < 0 else 0
-    score += 22 * max(0.0, min(1.0, float(ai_prob)))
-    return score
+        structure = 1.0 if ema20 < ema50 < ema200 else (0.65 if ema20 < ema50 else 0.25)
+        trend_strength = _clip01(abs(ema20 - ema50) / trend_span)
+    trend_score = 20.0 * (0.65 * structure + 0.35 * trend_strength)
+
+    # 14 pts: RSI and MACD momentum, both graded rather than binary.
+    macd_scale = max(atr * 0.02, abs(macd_hist), 1e-12)
+    if direction == 'BUY':
+        rsi_strength = _clip01((rsi - 50.0) / 15.0)
+        macd_strength = _clip01(0.5 + 0.5 * (macd_hist / macd_scale))
+    else:
+        rsi_strength = _clip01((50.0 - rsi) / 15.0)
+        macd_strength = _clip01(0.5 - 0.5 * (macd_hist / macd_scale))
+    momentum_score = 14.0 * (0.6 * rsi_strength + 0.4 * macd_strength)
+
+    # 14 pts: breakout or proximity to the relevant 20-bar extreme.
+    hi20 = float(r['high20'])
+    lo20 = float(r['low20'])
+    span20 = max(hi20 - lo20, atr)
+    if direction == 'BUY':
+        proximity = _clip01((close - lo20) / span20)
+        breakout = 1.0 if bool(r['breakout_up']) else proximity * 0.8
+    else:
+        proximity = _clip01((hi20 - close) / span20)
+        breakout = 1.0 if bool(r['breakout_dn']) else proximity * 0.8
+    breakout_score = 14.0 * breakout
+
+    # 7 pts: candle direction/body quality.
+    candle_range = max(high - low, 1e-12)
+    body_direction = (close - open_) / candle_range
+    candle_strength = _clip01(0.5 + (body_direction if direction == 'BUY' else -body_direction))
+    candle_score = 7.0 * candle_strength
+
+    # 7 pts: volume participation. Missing volume gets neutral credit.
+    vol_ratio = r['vol_ratio']
+    if pd.isna(vol_ratio):
+        volume_strength = 0.70
+    else:
+        volume_strength = _clip01(float(vol_ratio) / 1.20)
+    volume_score = 7.0 * volume_strength
+
+    # 8 pts: price location relative to EMA20, normalized by ATR.
+    ema_distance = (close - ema20) / (2.0 * atr)
+    price_strength = _clip01(0.5 + (ema_distance if direction == 'BUY' else -ema_distance))
+    price_score = 8.0 * price_strength
+
+    # 8 pts: higher-timeframe context. Neutral context is half credit.
+    if direction == 'BUY':
+        context_strength = 1.0 if trend_ctx > 0 else (0.5 if trend_ctx == 0 else 0.0)
+    else:
+        context_strength = 1.0 if trend_ctx < 0 else (0.5 if trend_ctx == 0 else 0.0)
+    context_score = 8.0 * context_strength
+
+    # 22 pts: model estimate. It ranks the directions; it is not presented as
+    # a calibrated probability of trade success.
+    ai_score = 22.0 * _clip01(ai_prob)
+
+    return trend_score + momentum_score + breakout_score + candle_score + volume_score + price_score + context_score + ai_score
 
 
 def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
-                min_score=70, min_ai=0.58, context=None, diagnostics=None):
+                min_score=65, min_ai=0.58, context=None, diagnostics=None,
+                min_gap=7.0):
     diagnostics = diagnostics if diagnostics is not None else {}
     if len(df) < 220:
         diagnostics['reject'] = 'insufficient_bars'
@@ -59,7 +121,7 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         if prob is None or not math.isfinite(float(prob)):
             diagnostics[f'{direction.lower()}_reject'] = 'no_model_probability'
             continue
-        prob = max(0.0, min(1.0, float(prob)))
+        prob = _clip01(prob)
         score = _score_direction(r, direction, prob, context)
         diagnostics[f'{direction.lower()}_ai'] = round(prob, 4)
         diagnostics[f'{direction.lower()}_score'] = round(score, 1)
@@ -68,13 +130,23 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
     if not candidates:
         diagnostics['reject'] = 'no_model_probabilities'
         return None
-    score, direction, ai_prob = max(candidates, key=lambda z: z[0])
+
+    candidates.sort(key=lambda z: z[0], reverse=True)
+    score, direction, ai_prob = candidates[0]
+    second_score = candidates[1][0] if len(candidates) > 1 else 0.0
     diagnostics['best_direction'] = direction
     diagnostics['best_score'] = round(score, 1)
+    diagnostics['score_gap'] = round(score - second_score, 1)
+
     if score < float(min_score):
         diagnostics['reject'] = 'score_below_threshold'
-        diagnostics['score_gap'] = round(float(min_score) - score, 1)
+        diagnostics['score_gap_to_threshold'] = round(float(min_score) - score, 1)
         return None
+    if len(candidates) > 1 and (score - second_score) < float(min_gap):
+        diagnostics['reject'] = 'direction_ambiguous'
+        diagnostics['min_direction_gap'] = float(min_gap)
+        return None
+
     hi = float(r['high20'])
     lo = float(r['low20'])
     span = max(hi - lo, atr)
