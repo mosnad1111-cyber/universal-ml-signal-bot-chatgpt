@@ -13,6 +13,9 @@ class DB:
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);''')
             cols={r[1] for r in c.execute('PRAGMA table_info(signals)')}
             if 'features_json' not in cols: c.execute('ALTER TABLE signals ADD COLUMN features_json TEXT')
+        # One-time cleanup for signals created by older builds before Telegram
+        # delivery was verified. This prevents phantom WAITING/ACTIVE locks.
+        self.cancel_open_once()
     def _conn(self):
         c=sqlite3.connect(self.path,timeout=30,check_same_thread=False); c.row_factory=sqlite3.Row; return c
     def create(self,s):
