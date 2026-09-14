@@ -35,6 +35,7 @@ def _label_direction(x, direction, horizon, rr=2.0):
         for j in range(i+1, min(len(x), i+horizon+1)):
             hit_target = high[j] >= target if direction == 1 else low[j] <= target
             hit_stop = low[j] <= stop if direction == 1 else high[j] >= stop
+            # Ambiguous OHLC bar: conservatively call it a loss.
             if hit_target and hit_stop:
                 outcome = 0; break
             if hit_target:
@@ -55,22 +56,38 @@ class GoldAI:
         horizons = {'5m': 36, '15m': 24, '1h': 18}
         labels = {d: _label_direction(x, d, horizons.get(timeframe, 24), rr) for d in (1, 0)}
         base = x[FEATURES[:-1]].copy()
-        valid = base.notna().all(axis=1) & labels[1].notna() & labels[0].notna()
-        base = base.loc[valid]
-        if len(base) < 300:
-            self.errors[timeframe] = f'insufficient_training_rows:{len(base)}'; return False
-        split = int(len(base) * 0.80)
-        train_idx, val_idx = base.index[:split], base.index[split:]
-        if len(train_idx) < 300 or len(val_idx) < 40:
-            self.errors[timeframe] = f'insufficient_split:{len(train_idx)}/{len(val_idx)}'; return False
+        base_valid = base.notna().all(axis=1)
+
+        # Important: do NOT require both BUY and SELL labels to exist on the
+        # same candle. That unnecessarily discards 1H samples and can bias the
+        # model toward candles where both hypothetical trades resolved.
+        valid_by_direction = {d: base_valid & labels[d].notna() for d in (1, 0)}
+        all_valid_idx = base.index[valid_by_direction[1] | valid_by_direction[0]]
+        if len(all_valid_idx) < 300:
+            self.errors[timeframe] = f'insufficient_training_rows:{len(all_valid_idx)}'; return False
+
+        # Split by unique candle timestamp first. No future timestamp can enter
+        # training, and BUY/SELL copies of one candle stay in the same split.
+        split_pos = int(len(all_valid_idx) * 0.80)
+        if split_pos <= 0 or split_pos >= len(all_valid_idx):
+            self.errors[timeframe] = 'invalid_temporal_split'; return False
+        split_time = all_valid_idx[split_pos]
         train_parts=[]; val_parts=[]
         for direction in (1, 0):
-            d=base.loc[train_idx].copy(); d['direction']=direction; d['_label']=labels[direction].loc[train_idx].astype(int).values; train_parts.append(d)
-            d=base.loc[val_idx].copy(); d['direction']=direction; d['_label']=labels[direction].loc[val_idx].astype(int).values; val_parts.append(d)
+            idx = base.index[valid_by_direction[direction]]
+            train_idx = idx[idx < split_time]
+            val_idx = idx[idx >= split_time]
+            if len(train_idx):
+                d=base.loc[train_idx].copy(); d['direction']=direction; d['_label']=labels[direction].loc[train_idx].astype(int).values; train_parts.append(d)
+            if len(val_idx):
+                d=base.loc[val_idx].copy(); d['direction']=direction; d['_label']=labels[direction].loc[val_idx].astype(int).values; val_parts.append(d)
+
+        if not train_parts or not val_parts:
+            self.errors[timeframe]='insufficient_temporal_split'; return False
         train=pd.concat(train_parts).sort_index(kind='stable'); val=pd.concat(val_parts).sort_index(kind='stable')
         Xtr=train[FEATURES]; ytr=train['_label']; Xv=val[FEATURES]; yv=val['_label']
-        if len(Xtr)<600 or ytr.nunique()<2 or yv.nunique()<2:
-            self.errors[timeframe]='invalid_class_distribution'; return False
+        if len(Xtr)<600 or len(Xv)<40 or ytr.nunique()<2 or yv.nunique()<2:
+            self.errors[timeframe]=f'invalid_class_distribution:train={len(Xtr)} val={len(Xv)}'; return False
         try:
             from xgboost import XGBClassifier
             model=XGBClassifier(n_estimators=350,max_depth=4,learning_rate=0.035,subsample=0.85,colsample_bytree=0.85,min_child_weight=6,reg_alpha=0.15,reg_lambda=2.0,objective='binary:logistic',eval_metric='logloss',tree_method='hist',random_state=42,n_jobs=1)
@@ -79,13 +96,34 @@ class GoldAI:
             self.errors[timeframe]=f'XGBoost: {type(exc).__name__}: {exc}'
             model=HistGradientBoostingClassifier(max_iter=250,learning_rate=0.045,max_leaf_nodes=15,l2_regularization=1.0,random_state=42)
             model.fit(Xtr,ytr); engine='HistGradientBoosting'
+
         pv=model.predict_proba(Xv)[:,1]
-        self.models[timeframe]=model; self.metrics[timeframe]={
+        val_direction=val['direction'].to_numpy()
+        metrics={
             'engine':engine,'training_rows':int(len(Xtr)),'validation_rows':int(len(Xv)),
-            'training_candles':int(len(train_idx)),'validation_candles':int(len(val_idx)),
+            'training_candles':int(len(set(train.index))),'validation_candles':int(len(set(val.index))),
             'auc':float(roc_auc_score(yv,pv)) if yv.nunique()==2 else 0.5,
             'accuracy':float(accuracy_score(yv,(pv>=0.5).astype(int))),
-            'positive_rate':float(ytr.mean()),'validation_positive_rate':float(yv.mean())}
+            'positive_rate':float(ytr.mean()),'validation_positive_rate':float(yv.mean()),
+            'validation_baseline_accuracy':float(max(yv.mean(),1-yv.mean())),
+            'validation_mean_probability':float(np.mean(pv)),
+            'validation_brier':float(np.mean((pv-yv.to_numpy())**2)),
+        }
+        # Direction-specific AUC is essential: a combined AUC can hide that
+        # BUY and SELL behave very differently, especially on 1H.
+        for d, name in ((1,'buy'),(0,'sell')):
+            mask=val_direction==d
+            if mask.sum() >= 10 and yv.iloc[mask].nunique()==2:
+                metrics[f'{name}_auc']=float(roc_auc_score(yv.iloc[mask],pv[mask]))
+            metrics[f'{name}_validation_rows']=int(mask.sum())
+            metrics[f'{name}_positive_rate']=float(yv.iloc[mask].mean()) if mask.sum() else 0.0
+
+        if hasattr(model, 'feature_importances_'):
+            imp=np.asarray(model.feature_importances_,dtype=float)
+            pairs=sorted(zip(FEATURES,imp),key=lambda z:z[1],reverse=True)[:10]
+            metrics['top_features']=[{'feature':k,'importance':float(v)} for k,v in pairs]
+
+        self.models[timeframe]=model; self.metrics[timeframe]=metrics
         self.trained_at[timeframe]=time.time(); self.errors.pop(timeframe,None); return True
 
     def probability(self, timeframe, row, direction):
