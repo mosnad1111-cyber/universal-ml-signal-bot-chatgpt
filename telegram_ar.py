@@ -2,11 +2,12 @@ import time
 import threading
 import requests
 from config import TELEGRAM_BOT_TOKEN
+from backtest import GoldBacktest
 
 class Telegram:
     def __init__(self, db=None):
         self.token=TELEGRAM_BOT_TOKEN; self.base=f'https://api.telegram.org/bot{self.token}' if self.token else ''
-        self.db=db; self.chat_id=None; self.offset=0; self.engine=None
+        self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False
         if self.db:
             saved=self.db.get_setting('telegram_chat_id')
             if saved:
@@ -30,7 +31,8 @@ class Telegram:
             [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
             [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
-            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'ℹ️ حالة البوت','callback_data':'status'}]
+            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
+            [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
     def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\nاختر العملية من الأزرار بالأسفل 👇'
@@ -47,6 +49,20 @@ class Telegram:
         if self.db:
             try: self.db.set_setting('telegram_chat_id',cid)
             except Exception: pass
+
+    def _backtest(self,cid):
+        if self.backtest_running:
+            self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
+        self.backtest_running=True
+        self.send('🧪 <b>بدأ Backtest تاريخي حقيقي</b>\n\nسيتم الاختبار بطريقة Walk-Forward: تدريب على الماضي ثم اختبار على المستقبل فقط.\n\n⏳ قد يستغرق بعض الوقت…',cid)
+        def work():
+            try:
+                bt=GoldBacktest(); results=bt.run_all(); self.send(bt.format_ar(results),cid)
+            except Exception as e:
+                self.send(f'❌ <b>فشل الـBacktest</b>\n{type(e).__name__}: {e}',cid)
+            finally:
+                self.backtest_running=False
+        threading.Thread(target=work,daemon=True).start()
 
     def poll(self):
         if not self.base: print('ERROR: TELEGRAM_BOT_TOKEN غير موجود'); return
@@ -76,6 +92,7 @@ class Telegram:
                             except Exception as e: self.send(f'⚠️ تعذر التحليل الآن: {e}',cid)
                         elif data=='stats': self.send(self.engine.stats_text(),cid)
                         elif data=='diagnostics': self.send(self.engine.diagnostics_text(),cid)
+                        elif data=='backtest': self._backtest(cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
