@@ -90,7 +90,6 @@ class Engine:
             setup.update({'symbol':GOLD_DATA_SYMBOL,'timeframe':tf,'wave_key':f'{tf}:{rh}:{rl}:{setup["candle_time"]}'})
             if self.db.open_for(GOLD_DATA_SYMBOL,tf):
                 diag['reject']='open_signal_exists'; self.last_diagnostics[tf]=diag; return None
-            # Telegram is the delivery boundary. Never create an open signal if there is no recipient.
             if not getattr(self.send,'__self__',None) or not self.send.__self__.ready():
                 diag['reject']='telegram_not_ready'; self.last_diagnostics[tf]=diag; return None
             sid=self.db.create(setup)
@@ -150,9 +149,15 @@ class Engine:
         threading.Thread(target=self.scanner,daemon=True).start(); threading.Thread(target=self.monitor,daemon=True).start()
 
     def stats_text(self):
-        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info(); lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ رابحة: <b>%d</b>'%w,'❌ خاسرة: <b>%d</b>'%l,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>النموذج</b>']
+        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info(); lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ رابحة: <b>%d</b>'%w,'❌ خاسرة: <b>%d</b>'%l,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
         for tf in TIMEFRAMES:
             v=m.get(tf,{})
-            if v: lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Accuracy {v.get("accuracy",0):.3f}')
+            if v:
+                lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}')
+                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f}')
+                if 'buy_auc' in v or 'sell_auc' in v: lines.append(f'   AUC شراء: {v.get("buy_auc",0):.3f} | AUC بيع: {v.get("sell_auc",0):.3f}')
+                lines.append(f'   Brier: {v.get("validation_brier",0):.4f}')
+                top=v.get('top_features',[])
+                if top: lines.append('   أهم العوامل: ' + ', '.join(f'{z["feature"]}={z["importance"]:.3f}' for z in top[:5]))
             else: lines.append(f'{tf}: ❌ {self.ai.errors.get(tf,"غير متوفر")}')
         return '\n'.join(lines)
