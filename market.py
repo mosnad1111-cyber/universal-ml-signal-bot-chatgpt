@@ -19,7 +19,11 @@ except Exception as exc:  # handled by fetch with a useful error
 else:
     _TV_IMPORT_ERROR = None
 
+# 5000 bars remains the preferred history. If anonymous TradingView access closes
+# the websocket during a large request, fetch() progressively falls back to smaller
+# histories so the live scanner can recover instead of staying offline.
 PERIODS = {'5m': 5000, '15m': 5000, '1h': 5000}
+FALLBACK_BARS = (2500, 1200, 600)
 INTERVALS = {
     '5m': 'in_5_minute',
     '15m': 'in_15_minute',
@@ -30,7 +34,9 @@ _tv = None
 _tv_lock = threading.RLock()
 _cache = {}
 _cache_lock = threading.RLock()
-CACHE_SECONDS = 12
+# A longer cache materially reduces repeated TradingView websocket connections.
+# The scanner/monitor can run much more frequently than this without hitting TV.
+CACHE_SECONDS = 30
 
 
 def _get_tv():
@@ -53,7 +59,6 @@ def _normalize_tv(df: pd.DataFrame) -> pd.DataFrame:
         raise RuntimeError('TradingView أعاد بيانات فارغة للرمز TVC:GOLD.')
 
     x = df.copy()
-    # tvDatafeed returns symbol + OHLCV columns in lower case.
     rename = {
         'open': 'Open', 'high': 'High', 'low': 'Low',
         'close': 'Close', 'volume': 'Volume'
@@ -77,6 +82,24 @@ def _normalize_tv(df: pd.DataFrame) -> pd.DataFrame:
     return x
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    text = f'{type(exc).__name__}: {exc}'.lower()
+    markers = (
+        'websocket', 'connection to remote host was lost',
+        'connection closed', 'connection reset', 'broken pipe',
+        'timed out', 'timeout', 'remote host'
+    )
+    return any(marker in text for marker in markers)
+
+
+def _bar_sizes(preferred: int):
+    sizes = [preferred]
+    for n in FALLBACK_BARS:
+        if n < preferred and n not in sizes:
+            sizes.append(n)
+    return sizes
+
+
 def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     # `symbol` is kept in the function signature for compatibility with the engine.
     # The exact requested instrument is always TVC:GOLD.
@@ -91,33 +114,52 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
             return item[1].copy()
 
     errors = []
-    for attempt in range(3):
-        try:
-            tv = _get_tv()
-            interval = getattr(Interval, INTERVALS[timeframe])
-            with _tv_lock:
-                raw = tv.get_hist(
-                    symbol='GOLD',
-                    exchange='TVC',
-                    interval=interval,
-                    n_bars=PERIODS[timeframe],
-                    extended_session=True,
-                )
-            df = _normalize_tv(raw)
-            with _cache_lock:
-                _cache[cache_key] = (time.time(), df.copy())
-            return df
-        except Exception as exc:
-            errors.append(f'محاولة {attempt + 1}: {type(exc).__name__}: {exc}')
-            # Recreate the client after a failed websocket so a broken connection
-            # is not reused on the next attempt.
-            global _tv
-            with _tv_lock:
-                _tv = None
-            time.sleep(1.5 * (attempt + 1))
+    requested_bars = int(period or PERIODS[timeframe])
+    bar_sizes = _bar_sizes(requested_bars)
+
+    # Serialize the complete TV request/retry sequence. This prevents the scanner,
+    # monitor and backtest from opening competing anonymous websocket sessions.
+    with _tv_lock:
+        for bars_index, n_bars in enumerate(bar_sizes):
+            for attempt in range(3):
+                try:
+                    tv = _get_tv()
+                    interval = getattr(Interval, INTERVALS[timeframe])
+                    raw = tv.get_hist(
+                        symbol='GOLD',
+                        exchange='TVC',
+                        interval=interval,
+                        n_bars=n_bars,
+                        extended_session=True,
+                    )
+                    df = _normalize_tv(raw)
+                    with _cache_lock:
+                        _cache[cache_key] = (time.time(), df.copy())
+                    return df
+                except Exception as exc:
+                    errors.append(
+                        f'{timeframe}/{n_bars} محاولة {attempt + 1}: '
+                        f'{type(exc).__name__}: {exc}'
+                    )
+                    # Never reuse a client after a websocket/connection failure.
+                    global _tv
+                    _tv = None
+
+                    # Exponential backoff. Connection failures get a little more
+                    # time before reconnecting; non-connection errors still retry.
+                    if attempt < 2:
+                        delay = min(12.0, 2.5 * (2 ** attempt))
+                        if not _is_connection_error(exc):
+                            delay = min(delay, 4.0)
+                        time.sleep(delay)
+
+            # Only reduce the requested history after all retries at the larger
+            # size failed. This preserves 5000-bar training whenever possible.
+            if bars_index < len(bar_sizes) - 1:
+                time.sleep(2.0)
 
     raise RuntimeError(
-        f'تعذر جلب بيانات الذهب TVC:GOLD ({timeframe}). '
+        f'تعذر جلب بيانات الذهب TVC:GOLD ({timeframe}) بعد إعادة الاتصال والتدرج في حجم البيانات. '
         + ' | '.join(errors)
     )
 
