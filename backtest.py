@@ -62,7 +62,7 @@ class GoldBacktest:
 
     @staticmethod
     def _ai_band(v):
-        p=float(v)*100; return '<30%' if p<30 else ('30-39%' if p<40 else ('40-49%' if p<50 else ('50-59%' if p<60 else '60%+')))
+        p=float(v)*100; return 'أقل من 30%' if p<30 else ('30-39%' if p<40 else ('40-49%' if p<50 else ('50-59%' if p<60 else '60%+')))
 
     @staticmethod
     def _groups(trades,key):
@@ -134,7 +134,7 @@ class GoldBacktest:
             lines += [f'⏱️ <b>{tf}</b>',f'📚 الشموع: {r.get("bars",0)}',f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
-            lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['<30%','30-39%','40-49%','50-59%','60%+']) + ['']
+            lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+']) + ['']
         gw=sum(max(float(results.get(tf,{}).get('net_r',0)),0) for tf in TIMEFRAMES); gl=sum(abs(min(float(results.get(tf,{}).get('net_r',0)),0)) for tf in TIMEFRAMES); pf=gw/gl if gl else (float('inf') if gw else 0); pf='∞' if np.isinf(pf) else f'{pf:.2f}'
         lines += [f'📌 <b>الإجمالي:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>Net:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
         return '\n'.join(lines)
