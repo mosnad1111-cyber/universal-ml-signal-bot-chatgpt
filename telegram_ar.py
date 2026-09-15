@@ -26,6 +26,27 @@ class Telegram:
             return bool(r.ok and r.json().get('ok'))
         except Exception: return False
 
+    def send_long(self,text,chat_id=None,limit=3900):
+        """Send long reports in Telegram-safe chunks, preserving line boundaries."""
+        if not text: return True
+        parts=[]; current=''
+        for line in text.splitlines(True):
+            if len(current)+len(line) <= limit:
+                current += line
+            else:
+                if current: parts.append(current.rstrip())
+                while len(line) > limit:
+                    parts.append(line[:limit]); line=line[limit:]
+                current=line
+        if current: parts.append(current.rstrip())
+        ok=True
+        total=len(parts)
+        for i,part in enumerate(parts,1):
+            if total > 1:
+                part=f'📄 <b>تقرير Backtest — جزء {i}/{total}</b>\n\n'+part
+            if not self.send(part,chat_id): ok=False
+        return ok
+
     def keyboard(self):
         return {'inline_keyboard':[
             [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
@@ -54,10 +75,25 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
-        self.send('🧪 <b>بدأ Backtest تاريخي حقيقي</b>\n\nسيتم الاختبار بطريقة Walk-Forward: تدريب على الماضي ثم اختبار على المستقبل فقط.\n\n⏳ قد يستغرق بعض الوقت…',cid)
+        self.send('🧪 <b>بدأ Backtest تاريخي حقيقي</b>\n\nسيتم الاختبار بطريقة Walk-Forward: تدريب على الماضي ثم اختبار على المستقبل فقط.\n\n📡 المصدر: TVC:GOLD\n⏱️ الفريمات: 5m / 15m / 1H\n\n⏳ جاري تجهيز البيانات…',cid)
         def work():
             try:
-                bt=GoldBacktest(); results=bt.run_all(); self.send(bt.format_ar(results),cid)
+                bt=GoldBacktest(); results={}
+                for tf in ('5m','15m','1h'):
+                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward ثم اختبار على المستقبل فقط…',cid)
+                    try:
+                        results[tf]=bt.run(tf)
+                        if results[tf].get('error'):
+                            self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
+                        else:
+                            r=results[tf]
+                            self.send(f'✅ <b>انتهى اختبار {tf}</b>\nالشموع: {r.get("bars",0)}\nالصفقات: {r.get("trades",0)}\nWin Rate: {r.get("win_rate",0):.1f}%\nNet: {r.get("net_r",0):+.1f}R',cid)
+                    except Exception as exc:
+                        results[tf]={'timeframe':tf,'error':f'{type(exc).__name__}: {exc}'}
+                        self.send(f'❌ <b>فشل اختبار {tf}</b>\n{type(exc).__name__}: {exc}',cid)
+                report=bt.format_ar(results)
+                if not self.send_long(report,cid):
+                    self.send('⚠️ <b>اكتمل الـBacktest لكن تعذر إرسال أحد أجزاء التقرير.</b>',cid)
             except Exception as e:
                 self.send(f'❌ <b>فشل الـBacktest</b>\n{type(e).__name__}: {e}',cid)
             finally:
