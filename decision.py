@@ -68,7 +68,7 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
     if len(df) < 220:
         diagnostics['reject'] = 'insufficient_bars'; return None
     r = df.iloc[-2]; atr = float(r['atr']); close = float(r['Close'])
-    diagnostics.update({'bars': len(df), 'candle_time': r.name.isoformat(), 'close': close, 'atr': atr})
+    diagnostics.update({'bars': len(df), 'candle_time': r.name.isoformat(), 'close': close, 'atr': atr, 'min_ai_required': float(min_ai)})
     if not math.isfinite(atr) or atr <= 0:
         diagnostics['reject'] = 'invalid_atr'; return None
     context = context or {}; candidates = []
@@ -90,10 +90,13 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         diagnostics['reject'] = 'score_below_threshold'; diagnostics['score_gap_to_threshold'] = round(float(min_score)-score, 1); return None
     if len(candidates) > 1 and score-second_score < float(min_gap):
         diagnostics['reject'] = 'direction_ambiguous'; diagnostics['min_direction_gap'] = float(min_gap); return None
+    if ai_prob < float(min_ai):
+        diagnostics['reject'] = 'ai_probability_below_threshold'
+        diagnostics['ai_probability'] = round(ai_prob, 4)
+        return None
 
     # Regime filter: when higher-timeframe context is decisive, do not trade
-    # against it. This avoids many counter-trend entries, especially on 15m.
-    # A neutral context still permits both directions.
+    # against it. This avoids counter-trend entries.
     context_trend = int(context.get('trend', 0))
     if context_trend > 0 and direction != 'BUY':
         diagnostics['reject'] = 'against_higher_timeframe_trend'; diagnostics['context_trend'] = context_trend; return None
