@@ -11,7 +11,10 @@ MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_A
 MODEL_REFRESH_HOURS=float(os.getenv('MODEL_REFRESH_HOURS','6')); DB_PATH=os.getenv('DB_PATH','data/gold_bot.sqlite3')
 MODEL_HISTORY_BARS=int(os.getenv('MODEL_HISTORY_BARS','5000'))
 # Historical validation controls.
-BACKTEST_BARS=int(os.getenv('BACKTEST_BARS','20000'))
+# TradingView's public tvDatafeed endpoint commonly caps the returned history
+# below 20,000 bars. Keep the default request within the reliably available
+# range so the backtest runs instead of being discarded as incomplete.
+BACKTEST_BARS=int(os.getenv('BACKTEST_BARS','5000'))
 BACKTEST_BARS_5M=int(os.getenv('BACKTEST_BARS_5M',str(BACKTEST_BARS)))
 BACKTEST_BARS_15M=int(os.getenv('BACKTEST_BARS_15M',str(BACKTEST_BARS)))
 BACKTEST_BARS_1H=int(os.getenv('BACKTEST_BARS_1H',str(BACKTEST_BARS)))
