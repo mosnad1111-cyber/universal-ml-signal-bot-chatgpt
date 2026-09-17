@@ -15,7 +15,7 @@ def _clip01(v):
 
 
 def _score_direction(r, direction, ai_prob, ctx):
-    """Continuous 100-point quality score instead of binary gating."""
+    """Continuous 100-point quality score."""
     close = float(r['Close']); open_ = float(r['Open']); high = float(r['High']); low = float(r['Low'])
     atr = max(float(r['atr']), 1e-12)
     ema20 = float(r['ema20']); ema50 = float(r['ema50']); ema200 = float(r['ema200'])
@@ -90,6 +90,15 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         diagnostics['reject'] = 'score_below_threshold'; diagnostics['score_gap_to_threshold'] = round(float(min_score)-score, 1); return None
     if len(candidates) > 1 and score-second_score < float(min_gap):
         diagnostics['reject'] = 'direction_ambiguous'; diagnostics['min_direction_gap'] = float(min_gap); return None
+
+    # Regime filter: when higher-timeframe context is decisive, do not trade
+    # against it. This avoids many counter-trend entries, especially on 15m.
+    # A neutral context still permits both directions.
+    context_trend = int(context.get('trend', 0))
+    if context_trend > 0 and direction != 'BUY':
+        diagnostics['reject'] = 'against_higher_timeframe_trend'; diagnostics['context_trend'] = context_trend; return None
+    if context_trend < 0 and direction != 'SELL':
+        diagnostics['reject'] = 'against_higher_timeframe_trend'; diagnostics['context_trend'] = context_trend; return None
 
     hi = float(r['high20']); lo = float(r['low20']); span = max(hi-lo, atr)
     if direction == 'BUY':
