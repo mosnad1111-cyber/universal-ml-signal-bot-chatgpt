@@ -3,19 +3,19 @@ import threading
 import requests
 from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS, BACKTEST_RETRAIN_EVERY
 from backtest import GoldBacktest
+from strategy_backtest import run as run_london_breakout
 
 class Telegram:
     def __init__(self, db=None):
         self.token=TELEGRAM_BOT_TOKEN; self.base=f'https://api.telegram.org/bot{self.token}' if self.token else ''
-        self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False
+        self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False; self.strategy_backtest_running=False
         if self.db:
             saved=self.db.get_setting('telegram_chat_id')
             if saved:
                 try: self.chat_id=int(saved)
                 except Exception: self.chat_id=saved
 
-    def ready(self):
-        return bool(self.base and self.chat_id)
+    def ready(self): return bool(self.base and self.chat_id)
 
     def send(self,text,chat_id=None):
         if not self.base: return False
@@ -30,17 +30,15 @@ class Telegram:
         if not text: return True
         parts=[]; current=''
         for line in text.splitlines(True):
-            if len(current)+len(line) <= limit:
-                current += line
+            if len(current)+len(line)<=limit: current+=line
             else:
                 if current: parts.append(current.rstrip())
-                while len(line) > limit:
-                    parts.append(line[:limit]); line=line[limit:]
+                while len(line)>limit: parts.append(line[:limit]); line=line[limit:]
                 current=line
         if current: parts.append(current.rstrip())
-        ok=True; total=len(parts)
+        ok=True
         for i,part in enumerate(parts,1):
-            if total > 1: part=f'📄 <b>تقرير Backtest — جزء {i}/{total}</b>\n\n'+part
+            if len(parts)>1: part=f'📄 <b>تقرير Backtest — جزء {i}/{len(parts)}</b>\n\n'+part
             if not self.send(part,chat_id): ok=False
         return ok
 
@@ -49,8 +47,8 @@ class Telegram:
             [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
             [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
-            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
-            [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
+            [{'text':'🧪 Backtest الأصلي','callback_data':'backtest'}, {'text':'📈 Backtest London Breakout','callback_data':'london_backtest'}],
+            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
     def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\nاختر العملية من الأزرار بالأسفل 👇'
@@ -69,31 +67,59 @@ class Telegram:
             except Exception: pass
 
     def _backtest(self,cid):
-        if self.backtest_running:
-            self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
+        if self.backtest_running or self.strategy_backtest_running:
+            self.send('⏳ يوجد Backtest يعمل حاليًا. انتظر حتى ينتهي.',cid); return
         self.backtest_running=True
-        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward: تدريب على الماضي ثم اختبار على المستقبل فقط.\n\n📡 المصدر: TVC:GOLD\n⏱️ الفريمات: 5m / 15m / 1H\n📚 عدد الشموع المستهدف: {BACKTEST_BARS}\n🔁 إعادة التدريب كل: {BACKTEST_RETRAIN_EVERY} شمعة\n\n⏳ جاري تجهيز البيانات…',cid)
+        self.send(f'🧪 <b>بدأ Backtest الأصلي</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 15m / 1H\nالشموع المستهدفة: {BACKTEST_BARS}\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
         def work():
             try:
                 bt=GoldBacktest(); results={}
                 for tf in ('5m','15m','1h'):
-                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {BACKTEST_BARS} شمعة تقريبًا…',cid)
+                    self.send(f'⏳ <b>جاري اختبار {tf}</b>',cid)
                     try:
                         results[tf]=bt.run(tf,bars=BACKTEST_BARS,retrain_every=BACKTEST_RETRAIN_EVERY)
-                        if results[tf].get('error'):
-                            self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
+                        if results[tf].get('error'): self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
                         else:
-                            r=results[tf]
-                            self.send(f'✅ <b>انتهى اختبار {tf}</b>\nالشموع: {r.get("bars",0)}\nالصفقات: {r.get("trades",0)}\nWin Rate: {r.get("win_rate",0):.1f}%\nNet: {r.get("net_r",0):+.1f}R',cid)
+                            r=results[tf]; self.send(f'✅ <b>انتهى اختبار {tf}</b>\nالشموع: {r.get("bars",0)}\nالصفقات: {r.get("trades",0)}\nWin Rate: {r.get("win_rate",0):.1f}%\nNet: {r.get("net_r",0):+.1f}R',cid)
                     except Exception as exc:
-                        results[tf]={'timeframe':tf,'error':f'{type(exc).__name__}: {exc}'}
-                        self.send(f'❌ <b>فشل اختبار {tf}</b>\n{type(exc).__name__}: {exc}',cid)
-                report=bt.format_ar(results)
-                if not self.send_long(report,cid): self.send('⚠️ <b>اكتمل الـBacktest لكن تعذر إرسال أحد أجزاء التقرير.</b>',cid)
-            except Exception as e:
-                self.send(f'❌ <b>فشل الـBacktest</b>\n{type(e).__name__}: {e}',cid)
-            finally:
-                self.backtest_running=False
+                        results[tf]={'timeframe':tf,'error':f'{type(exc).__name__}: {exc}'}; self.send(f'❌ <b>فشل اختبار {tf}</b>\n{type(exc).__name__}: {exc}',cid)
+                self.send_long(bt.format_ar(results),cid)
+            except Exception as e: self.send(f'❌ <b>فشل الـBacktest</b>\n{type(e).__name__}: {e}',cid)
+            finally: self.backtest_running=False
+        threading.Thread(target=work,daemon=True).start()
+
+    def _london_backtest(self,cid):
+        if self.backtest_running or self.strategy_backtest_running:
+            self.send('⏳ يوجد Backtest يعمل حاليًا. انتظر حتى ينتهي.',cid); return
+        self.strategy_backtest_running=True
+        self.send(f'📈 <b>بدأ Backtest استراتيجية London Breakout</b>\n\n📡 المصدر: TVC:GOLD\n⏱️ الفريمات: 5m / 15m / 1H\n📚 الشموع المستهدفة: {BACKTEST_BARS}\n🎯 الاختبار منفصل عن Backtest الأصلي\n\n⏳ جاري الاختبار…',cid)
+        def work():
+            try:
+                reports=[]
+                for tf in ('5m','15m','1h'):
+                    self.send(f'⏳ <b>London Breakout — {tf}</b>\nجاري تحليل البيانات التاريخية…',cid)
+                    try:
+                        r=run_london_breakout(tf,BACKTEST_BARS)
+                        if r.get('error'):
+                            reports.append(f'⚠️ <b>{tf}</b>: {r["error"]}')
+                        else:
+                            reports.append('\n'.join([
+                                f'📈 <b>نتائج London Breakout — {tf}</b>',
+                                f'الشموع الخام: {r.get("raw_bars",0)}',
+                                f'الشموع القابلة للاستخدام: {r.get("usable_bars",0)}',
+                                f'الصفقات: {r.get("trades",0)}',
+                                f'الرابحة: {r.get("wins",0)} | الخاسرة: {r.get("losses",0)}',
+                                f'نسبة الفوز: {r.get("win_rate",0):.2f}%',
+                                f'صافي R: {r.get("net_r",0):+.2f}R',
+                                f'التوقع الرياضي: {r.get("expectancy_r",0):+.4f}R',
+                                f'فلتر الاختراق: {r.get("filters",{}).get("no_breakout",0)}',
+                                f'فلتر الزخم: {r.get("filters",{}).get("momentum",0)}'
+                            ]))
+                    except Exception as exc: reports.append(f'❌ <b>{tf}</b>: {type(exc).__name__}: {exc}')
+                self.send_long('\n\n━━━━━━━━━━━━━━\n\n'.join(reports),cid)
+                self.send('ℹ️ <b>انتهى اختبار London Breakout.</b> النتائج تاريخية وليست ضمانًا للربح.',cid)
+            except Exception as e: self.send(f'❌ <b>فشل اختبار London Breakout</b>\n{type(e).__name__}: {e}',cid)
+            finally: self.strategy_backtest_running=False
         threading.Thread(target=work,daemon=True).start()
 
     def poll(self):
@@ -103,8 +129,7 @@ class Telegram:
                 r=requests.get(self.base+'/getUpdates',params={'timeout':25,'offset':self.offset},timeout=35)
                 if not r.ok: time.sleep(5); continue
                 for u in r.json().get('result',[]):
-                    self.offset=u['update_id']+1
-                    msg=u.get('message')
+                    self.offset=u['update_id']+1; msg=u.get('message')
                     if msg:
                         cid=msg['chat']['id']; self._remember_chat(cid); self.send_menu(cid)
                     cb=u.get('callback_query')
@@ -119,12 +144,12 @@ class Telegram:
                                 if not s:
                                     d=self.engine.last_diagnostics.get(tf,{})
                                     labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'البيانات غير كافية','no_model_probabilities':'لا توجد نتيجة AI'}
-                                    reason=labels.get(d.get('reject',''),d.get('reject','غير معروف'))
-                                    self.send(f'⚪ <b>لا توجد إشارة قوية الآن</b>\nالفريم: {tf}\n\n🔎 السبب: <b>{reason}</b>',cid)
+                                    self.send(f'⚪ <b>لا توجد إشارة قوية الآن</b>\nالفريم: {tf}\n\n🔎 السبب: <b>{labels.get(d.get("reject",""),d.get("reject","غير معروف"))}</b>',cid)
                             except Exception as e: self.send(f'⚠️ تعذر التحليل الآن: {e}',cid)
                         elif data=='stats': self.send(self.engine.stats_text(),cid)
                         elif data=='diagnostics': self.send(self.engine.diagnostics_text(),cid)
                         elif data=='backtest': self._backtest(cid)
+                        elif data=='london_backtest': self._london_backtest(cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
