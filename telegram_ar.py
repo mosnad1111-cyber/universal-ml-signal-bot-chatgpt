@@ -1,8 +1,13 @@
 import time
 import threading
 import requests
-from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS, BACKTEST_RETRAIN_EVERY
+from config import (
+    TELEGRAM_BOT_TOKEN, BACKTEST_BARS, BACKTEST_RETRAIN_EVERY,
+    TIMEFRAMES, BACKTEST_BARS_1M, BACKTEST_BARS_5M,
+    BACKTEST_BARS_15M, BACKTEST_BARS_30M, BACKTEST_BARS_1H,
+)
 from backtest import GoldBacktest
+
 
 class Telegram:
     def __init__(self, db=None):
@@ -70,14 +75,32 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
-        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 15m / 1H\nالشموع المستهدفة: {BACKTEST_BARS}\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
+        tf_bars = {
+            '1m': BACKTEST_BARS_1M,
+            '5m': BACKTEST_BARS_5M,
+            '15m': BACKTEST_BARS_15M,
+            '30m': BACKTEST_BARS_30M,
+            '1h': BACKTEST_BARS_1H,
+        }
+        test_timeframes = [tf for tf in TIMEFRAMES if tf in tf_bars]
+        if not test_timeframes:
+            test_timeframes = ['1m','5m','15m','30m','1h']
+        self.send(
+            '🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\n'
+            'Walk-Forward على TVC:GOLD\n'
+            f'الفريمات: {" / ".join(test_timeframes)}\n'
+            f'الشموع المستهدفة: {BACKTEST_BARS}\n'
+            f'إعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n'
+            '⏳ جاري تجهيز البيانات…', cid
+        )
         def work():
             try:
                 bt=GoldBacktest(); results={}
-                for tf in ('5m','15m','1h'):
-                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {BACKTEST_BARS} شمعة تقريبًا…',cid)
+                for tf in test_timeframes:
+                    bars = tf_bars[tf]
+                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {bars} شمعة تقريبًا…',cid)
                     try:
-                        results[tf]=bt.run(tf,bars=BACKTEST_BARS,retrain_every=BACKTEST_RETRAIN_EVERY)
+                        results[tf]=bt.run(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY)
                         if results[tf].get('error'):
                             self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
                         else:
