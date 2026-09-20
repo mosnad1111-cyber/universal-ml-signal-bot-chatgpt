@@ -18,28 +18,56 @@ class GoldBacktest:
 
     def _enrich(self, tf, x):
         x = x.copy()
-        for htf, prefix in [('15m', 'ctx15'), ('1h', 'ctx1h')]:
-            needed = (tf == '5m' and htf in ('15m', '1h')) or (tf == '15m' and htf == '1h')
-            if not needed:
-                x[prefix+'_trend'] = 0; x[prefix+'_rsi'] = 50; x[prefix+'_macd_hist'] = 0; x[prefix+'_dist_ema20'] = 0
+        # Map each tested timeframe to the higher-timeframe context it needs.
+        # 1m -> 5m/15m/1h, 5m -> 15m/1h, 15m -> 1h, 30m -> 1h.
+        context_map = {
+            '1m': {'5m': 'ctx5', '15m': 'ctx15', '1h': 'ctx1h'},
+            '5m': {'15m': 'ctx15', '1h': 'ctx1h'},
+            '15m': {'1h': 'ctx1h'},
+            '30m': {'1h': 'ctx1h'},
+        }
+        required = context_map.get(tf, {})
+        for htf, prefix in [('5m', 'ctx5'), ('15m', 'ctx15'), ('1h', 'ctx1h')]:
+            if htf not in required:
+                x[prefix+'_trend'] = 0
+                x[prefix+'_rsi'] = 50
+                x[prefix+'_macd_hist'] = 0
+                x[prefix+'_dist_ema20'] = 0
                 continue
             try:
                 h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
-                h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
+                h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
+                h['trend'] = 0
                 h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
                 h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
-                h = h.rename(columns={'trend':prefix+'_trend','rsi':prefix+'_rsi','macd_hist':prefix+'_macd_hist','dist_ema20':prefix+'_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
-                x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
+                h = h.rename(columns={
+                    'trend': prefix+'_trend',
+                    'rsi': prefix+'_rsi',
+                    'macd_hist': prefix+'_macd_hist',
+                    'dist_ema20': prefix+'_dist_ema20',
+                }).drop(columns=['ema20','ema50','ema200'])
+                x = pd.merge_asof(
+                    x.sort_index(), h.sort_index(),
+                    left_index=True, right_index=True, direction='backward'
+                )
             except Exception:
-                x[prefix+'_trend'] = 0; x[prefix+'_rsi'] = 50; x[prefix+'_macd_hist'] = 0; x[prefix+'_dist_ema20'] = 0
+                x[prefix+'_trend'] = 0
+                x[prefix+'_rsi'] = 50
+                x[prefix+'_macd_hist'] = 0
+                x[prefix+'_dist_ema20'] = 0
         return x
 
     def _context(self, tf, row_time, x):
         r = x.loc[x.index <= row_time].iloc[-1]
+        if tf == '1m':
+            trends = [int(r.get('ctx5_trend', 0)), int(r.get('ctx15_trend', 0)), int(r.get('ctx1h_trend', 0))]
+            nonzero = [v for v in trends if v != 0]
+            return {'trend': nonzero[0] if nonzero and all(v > 0 for v in nonzero) else (-1 if nonzero and all(v < 0 for v in nonzero) else 0)}
         if tf == '5m':
             a, b = int(r.get('ctx15_trend', 0)), int(r.get('ctx1h_trend', 0))
             return {'trend': 1 if a > 0 and b > 0 else (-1 if a < 0 and b < 0 else 0)}
-        if tf == '15m': return {'trend': int(r.get('ctx1h_trend', 0))}
+        if tf in ('15m', '30m'):
+            return {'trend': int(r.get('ctx1h_trend', 0))}
         return {'trend': 0}
 
     def _resolve(self, df, start, setup):
@@ -85,8 +113,10 @@ class GoldBacktest:
     def run(self, tf, bars=None, retrain_every=None):
         started = time.time()
         requested_bars = int(bars if bars is not None else {
+            '1m': BACKTEST_BARS_1M,
             '5m': BACKTEST_BARS_5M,
             '15m': BACKTEST_BARS_15M,
+            '30m': BACKTEST_BARS_30M,
             '1h': BACKTEST_BARS_1H,
         }.get(tf, BACKTEST_BARS))
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
@@ -122,7 +152,13 @@ class GoldBacktest:
 
     def run_all(self):
         out = {}
-        bars_by_tf = {'5m': BACKTEST_BARS_5M, '15m': BACKTEST_BARS_15M, '1h': BACKTEST_BARS_1H}
+        bars_by_tf = {
+            '1m': BACKTEST_BARS_1M,
+            '5m': BACKTEST_BARS_5M,
+            '15m': BACKTEST_BARS_15M,
+            '30m': BACKTEST_BARS_30M,
+            '1h': BACKTEST_BARS_1H,
+        }
         for tf in TIMEFRAMES:
             try: out[tf] = self.run(tf, bars=bars_by_tf.get(tf, BACKTEST_BARS), retrain_every=BACKTEST_RETRAIN_EVERY)
             except Exception as exc: traceback.print_exc(); out[tf] = {'timeframe':tf,'error':f'{type(exc).__name__}: {exc}'}
@@ -150,11 +186,7 @@ class GoldBacktest:
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+']) + ['']
         gross_profit = sum(sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])) for tf in TIMEFRAMES)
-        gross_loss = abs(sum(
-            min(t.get('r', 0), 0)
-            for tf in TIMEFRAMES
-            for t in results.get(tf, {}).get('trades_detail', [])
-        ))
+        gross_loss = abs(sum(min(t.get('r', 0), 0) for tf in TIMEFRAMES for t in results.get(tf, {}).get('trades_detail', [])))
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
         lines += [f'📌 <b>الإجمالي:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>Net:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
         return '\n'.join(lines)
