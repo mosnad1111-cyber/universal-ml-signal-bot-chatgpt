@@ -3,8 +3,9 @@ from dotenv import load_dotenv
 load_dotenv()
 TELEGRAM_BOT_TOKEN=os.getenv('TELEGRAM_BOT_TOKEN','').strip()
 GOLD_DATA_SYMBOL='TVC:GOLD'; GOLD_TV_SYMBOL='GOLD'; GOLD_TV_EXCHANGE='TVC'; TV_SYMBOL='TVC:GOLD'
-# Extended test set: 1m and 30m are included for comparative backtesting.
-TIMEFRAMES=[x.strip() for x in os.getenv('TIMEFRAMES','1m,5m,15m,30m,1h').split(',') if x.strip()]
+# Always include the extended comparison set, even if Render has an older TIMEFRAMES value.
+_configured_timeframes=[x.strip() for x in os.getenv('TIMEFRAMES','').split(',') if x.strip()]
+TIMEFRAMES=list(dict.fromkeys(_configured_timeframes + ['1m','5m','15m','30m','1h']))
 SCAN_SECONDS=int(os.getenv('SCAN_SECONDS','60')); MONITOR_SECONDS=int(os.getenv('MONITOR_SECONDS','15'))
 RR=float(os.getenv('RR','2.0')); PIVOT_LEN=int(os.getenv('PIVOT_LEN','5')); DIVISOR=float(os.getenv('DIVISOR','3.6'))
 ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_ATR_MULT','1.15'))
