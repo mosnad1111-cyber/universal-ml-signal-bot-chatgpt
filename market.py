@@ -17,9 +17,15 @@ except Exception as exc:
 else:
     _TV_IMPORT_ERROR = None
 
-PERIODS = {'5m': 5000, '15m': 5000, '1h': 5000}
+PERIODS = {'1m': 5000, '5m': 5000, '15m': 5000, '30m': 5000, '1h': 5000}
 FALLBACK_BARS = (5000, 2500, 1200, 600)
-INTERVALS = {'5m': 'in_5_minute', '15m': 'in_15_minute', '1h': 'in_1_hour'}
+INTERVALS = {
+    '1m': 'in_1_minute',
+    '5m': 'in_5_minute',
+    '15m': 'in_15_minute',
+    '30m': 'in_30_minute',
+    '1h': 'in_1_hour',
+}
 
 _tv = None
 _tv_lock = threading.RLock()
@@ -76,8 +82,6 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     if timeframe not in INTERVALS:
         raise RuntimeError(f'فريم غير مدعوم: {timeframe}')
     requested_bars = int(period or PERIODS[timeframe])
-    # The requested history is part of the cache key. Previously, a cached 5000-bar
-    # live result could silently satisfy a 15000-bar backtest request.
     cache_key = (timeframe, requested_bars)
     now = time.time()
     with _cache_lock:
