@@ -1,14 +1,14 @@
 # Gold AI Telegram Bot V9 — TVC:GOLD
 
-نظام تحليل واختبار AI مخصص للذهب `TVC:GOLD` على الفريمات `5m / 15m / 1H`.
+نظام تحليل واختبار AI مخصص للذهب `TVC:GOLD` على الفريمين `5m / 1H` فقط.
 
 ## المكونات
 - XGBoost حقيقي عند توفره، مع fallback آمن إلى HistGradientBoosting.
 - تدريب Walk-Forward زمني.
 - Features للاتجاه والزخم والتذبذب والشموع والاختراق.
-- Context متعدد الفريمات.
+- سياق الفريم الأعلى: `1H` لتأكيد اتجاه إشارات `5m`.
 - حساب SL/TP بواسطة ATR وRR.
-- Backtest تاريخي أصلي متاح من خلال Telegram.
+- Backtest تاريخي أصلي متاح من خلال Telegram على `5m / 1H` فقط.
 - واجهة Telegram عربية بالكامل.
 
 ## Backtest من Telegram
@@ -16,7 +16,7 @@
 
 `🧪 Backtest تاريخي`
 
-سيتم اختبار الاستراتيجية الأصلية بنظام Walk-Forward على الفريمات `5m / 15m / 1H`، مع عرض الصفقات ونسبة الفوز وصافي `R` وProfit Factor وMax Drawdown.
+سيتم اختبار الاستراتيجية بنظام Walk-Forward على `5m / 1H` فقط، مع عرض الصفقات ونسبة الفوز وصافي `R` وProfit Factor وMax Drawdown.
 
 ## Render
 Python 3.12.13، Web Service، ثم تشغيل Gunicorn عبر `web:app`.
