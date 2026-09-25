@@ -18,38 +18,28 @@ class GoldBacktest:
 
     def _enrich(self, tf, x):
         x = x.copy()
-        # 5m uses only 1h as higher-timeframe context; 1h is standalone.
-        prefix = 'ctx1h'
-        if tf == '5m':
-            try:
-                h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, '1h')).dropna())
-                h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
-                h['trend'] = 0
-                h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
-                h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
-                h = h.rename(columns={
-                    'trend': prefix+'_trend',
-                    'rsi': prefix+'_rsi',
-                    'macd_hist': prefix+'_macd_hist',
-                    'dist_ema20': prefix+'_dist_ema20',
-                }).drop(columns=['ema20','ema50','ema200'])
-                x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
-            except Exception:
-                x[prefix+'_trend'] = 0
-                x[prefix+'_rsi'] = 50
-                x[prefix+'_macd_hist'] = 0
-                x[prefix+'_dist_ema20'] = 0
-        else:
-            x[prefix+'_trend'] = 0
-            x[prefix+'_rsi'] = 50
-            x[prefix+'_macd_hist'] = 0
-            x[prefix+'_dist_ema20'] = 0
+        # 15m is internal context for 5m only; it is not a tested/user-facing timeframe.
+        for htf, prefix in [('15m', 'ctx15'), ('1h', 'ctx1h')]:
+            if tf == '5m':
+                try:
+                    h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
+                    h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
+                    h['trend'] = 0
+                    h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
+                    h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
+                    h = h.rename(columns={'trend':prefix+'_trend','rsi':prefix+'_rsi','macd_hist':prefix+'_macd_hist','dist_ema20':prefix+'_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
+                    x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
+                except Exception:
+                    x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
+            else:
+                x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
         return x
 
     def _context(self, tf, row_time, x):
         r = x.loc[x.index <= row_time].iloc[-1]
         if tf == '5m':
-            return {'trend': int(r.get('ctx1h_trend', 0))}
+            a, b = int(r.get('ctx15_trend', 0)), int(r.get('ctx1h_trend', 0))
+            return {'trend': 1 if a > 0 and b > 0 else (-1 if a < 0 and b < 0 else 0)}
         return {'trend': 0}
 
     def _resolve(self, df, start, setup):
