@@ -55,5 +55,14 @@ class DB:
     def closed_stats(self):
         with self.lock,self._conn() as c: rows=c.execute("SELECT result FROM signals WHERE status='CLOSED' AND result IN ('TP','SL')").fetchall()
         w=sum(r['result']=='TP' for r in rows); l=sum(r['result']=='SL' for r in rows); return len(rows),w,l
+    def timeframe_closed_stats(self,tf):
+        with self.lock,self._conn() as c:
+            rows=c.execute("SELECT result FROM signals WHERE timeframe=? AND status='CLOSED' AND result IN ('TP','SL')",(tf,)).fetchall()
+        w=sum(r['result']=='TP' for r in rows); l=sum(r['result']=='SL' for r in rows)
+        return len(rows),w,l
+    def timeframe_open_count(self,tf):
+        with self.lock,self._conn() as c:
+            r=c.execute("SELECT COUNT(*) AS n FROM signals WHERE timeframe=? AND status IN ('WAITING','ACTIVE')",(tf,)).fetchone()
+        return int(r['n'])
     def recent(self,n=10):
         with self.lock,self._conn() as c:return c.execute("SELECT * FROM signals ORDER BY id DESC LIMIT ?",(n,)).fetchall()
