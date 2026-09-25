@@ -13,8 +13,11 @@ BASE_FEATURES = [
     'dist_ema20','dist_ema50','dist_ema200','atr_rank','trend_strength',
     'breakout_up','breakout_dn','dist_high20_atr','dist_low20_atr'
 ]
+# The live bot now supports only 5m + 1h.
+# 5m receives 1h context; 1h uses neutral self-context values.
+# Keep the feature list aligned with Engine._enrich() so training cannot
+# fail because of removed legacy 15m columns.
 CONTEXT_FEATURES = [
-    'ctx15_trend','ctx15_rsi','ctx15_macd_hist','ctx15_dist_ema20',
     'ctx1h_trend','ctx1h_rsi','ctx1h_macd_hist','ctx1h_dist_ema20'
 ]
 FEATURES = BASE_FEATURES + CONTEXT_FEATURES + ['direction']
