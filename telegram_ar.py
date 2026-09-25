@@ -3,8 +3,7 @@ import threading
 import requests
 from config import (
     TELEGRAM_BOT_TOKEN, BACKTEST_BARS, BACKTEST_RETRAIN_EVERY,
-    TIMEFRAMES, BACKTEST_BARS_1M, BACKTEST_BARS_5M,
-    BACKTEST_BARS_15M, BACKTEST_BARS_30M, BACKTEST_BARS_1H,
+    TIMEFRAMES, BACKTEST_BARS_5M, BACKTEST_BARS_1H,
 )
 from backtest import GoldBacktest
 
@@ -49,8 +48,7 @@ class Telegram:
 
     def keyboard(self):
         return {'inline_keyboard':[
-            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
-            [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
+            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
@@ -76,17 +74,12 @@ class Telegram:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
         tf_bars = {
-            '1m': BACKTEST_BARS_1M,
             '5m': BACKTEST_BARS_5M,
-            '15m': BACKTEST_BARS_15M,
-            '30m': BACKTEST_BARS_30M,
             '1h': BACKTEST_BARS_1H,
         }
         test_timeframes = [tf for tf in TIMEFRAMES if tf in tf_bars]
-        if not test_timeframes:
-            test_timeframes = ['1m','5m','15m','30m','1h']
         self.send(
-            '🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\n'
+            '🧪 <b>بدأ Backtest تاريخي</b>\n\n'
             'Walk-Forward على TVC:GOLD\n'
             f'الفريمات: {" / ".join(test_timeframes)}\n'
             f'الشموع المستهدفة: {BACKTEST_BARS}\n'
@@ -153,7 +146,7 @@ class Telegram:
                                 for s in rows:
                                     icon='🟢' if s['direction']=='BUY' else '🔴'; lines.append(f'{icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
                                 self.send('\n'.join(lines),cid)
-                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 15m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
+                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 1H فقط\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
             except Exception: time.sleep(5)
 
     def start(self,engine):
