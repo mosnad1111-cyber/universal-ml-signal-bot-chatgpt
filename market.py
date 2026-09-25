@@ -17,13 +17,10 @@ except Exception as exc:
 else:
     _TV_IMPORT_ERROR = None
 
-PERIODS = {'1m': 5000, '5m': 5000, '15m': 5000, '30m': 5000, '1h': 5000}
+PERIODS = {'5m': 5000, '1h': 5000}
 FALLBACK_BARS = (5000, 2500, 1200, 600)
 INTERVALS = {
-    '1m': 'in_1_minute',
     '5m': 'in_5_minute',
-    '15m': 'in_15_minute',
-    '30m': 'in_30_minute',
     '1h': 'in_1_hour',
 }
 
