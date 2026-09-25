@@ -77,10 +77,7 @@ class Engine:
             if tf not in self.ai.models: diag['reject']='model_not_ready'; return None
             row=x.iloc[-2]; diag['candle_time']=row.name.isoformat(); diag['last_raw_time']=df.index[-1].isoformat()
             probs={'BUY':self.ai.probability(tf,row,'BUY'),'SELL':self.ai.probability(tf,row,'SELL')}; diag['buy_ai']=None if probs['BUY'] is None else round(probs['BUY'],4); diag['sell_ai']=None if probs['SELL'] is None else round(probs['SELL'],4)
-            ctx=self._context(tf,row.name); self.last_context[tf]=ctx; context={'trend':0}
-            if tf=='5m':
-                t15=ctx.get('15m',{}).get('trend',0); t1h=ctx.get('1h',{}).get('trend',0); context['trend']=1 if t15>0 and t1h>0 else (-1 if t15<0 and t1h<0 else 0)
-            elif tf=='15m': context['trend']=ctx.get('1h',{}).get('trend',0)
+            ctx=self._context(tf,row.name); self.last_context[tf]=ctx; context={'trend':ctx.get('1h',{}).get('trend',0) if tf=='5m' else 0}
             diag['context_trend']=context['trend']
             setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,MIN_SCORE,MIN_AI_PROB,context,diagnostics=diag)
             if not setup: self.last_diagnostics[tf]=diag; return None
