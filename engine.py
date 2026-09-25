@@ -144,7 +144,12 @@ class Engine:
         threading.Thread(target=self.scanner,daemon=True).start(); threading.Thread(target=self.monitor,daemon=True).start()
 
     def stats_text(self):
-        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info(); lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ رابحة: <b>%d</b>'%w,'❌ خاسرة: <b>%d</b>'%l,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
+        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info()
+        lines=['📊 <b>إحصائيات أداء البوت</b>','','🥇 <b>الذهب — TVC:GOLD</b>','']
+        for tf,label in [('5m','5 دقائق'),('1h','1 ساعة')]:
+            n,tw,tl=self.db.timeframe_closed_stats(tf); twr=100*tw/n if n else 0; tr=tw*RR-tl; open_n=self.db.timeframe_open_count(tf)
+            lines += [f'⏱️ <b>{label} ({tf})</b>',f'📌 إجمالي الصفقات المغلقة: <b>{n}</b>',f'✅ الصفقات الرابحة: <b>{tw}</b>',f'❌ الصفقات الخاسرة: <b>{tl}</b>',f'📈 نسبة الفوز: <b>{twr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{tr:+.1f}R</b>',f'🔓 صفقات مفتوحة: <b>{open_n}</b>','']
+        lines += ['📊 <b>الإجمالي</b>',f'📌 الصفقات المغلقة: <b>{total}</b>',f'✅ رابحة: <b>{w}</b>',f'❌ خاسرة: <b>{l}</b>',f'📈 نسبة الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
         for tf in TIMEFRAMES:
             v=m.get(tf,{})
             if v:
