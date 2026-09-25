@@ -25,7 +25,7 @@ class Engine:
 
     def _context(self, tf, target_index):
         ctx = {}
-        sources = {'5m': ['15m', '1h'], '15m': ['1h'], '1h': []}
+        sources = {'5m': ['1h'], '1h': []}
         for htf in sources.get(tf, []):
             try:
                 d = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
@@ -40,20 +40,18 @@ class Engine:
 
     def _enrich(self, tf, x):
         x = x.copy()
-        for htf, prefix in [('15m', 'ctx15'), ('1h', 'ctx1h')]:
-            needed = (tf == '5m' and htf in ('15m', '1h')) or (tf == '15m' and htf == '1h')
-            if needed:
-                try:
-                    h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
-                    h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
-                    h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
-                    h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
-                    h = h.rename(columns={'trend':prefix+'_trend','rsi':prefix+'_rsi','macd_hist':prefix+'_macd_hist','dist_ema20':prefix+'_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
-                    x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
-                except Exception:
-                    x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
-            else:
-                x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
+        if tf == '5m':
+            try:
+                h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, '1h')).dropna())
+                h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
+                h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
+                h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
+                h = h.rename(columns={'trend':'ctx1h_trend','rsi':'ctx1h_rsi','macd_hist':'ctx1h_macd_hist','dist_ema20':'ctx1h_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
+                x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
+            except Exception:
+                x['ctx1h_trend']=0; x['ctx1h_rsi']=50; x['ctx1h_macd_hist']=0; x['ctx1h_dist_ema20']=0
+        else:
+            x['ctx1h_trend']=0; x['ctx1h_rsi']=50; x['ctx1h_macd_hist']=0; x['ctx1h_dist_ema20']=0
         return x
 
     def signal_text(self, s):
