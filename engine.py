@@ -25,8 +25,7 @@ class Engine:
 
     def _context(self, tf, target_index):
         ctx = {}
-        # 15m remains internal context for 5m signals only.
-        sources = {'5m': ['15m', '1h'], '1h': []}
+        sources = {'5m': ['15m', '1h'], '15m': ['1h'], '1h': []}
         for htf in sources.get(tf, []):
             try:
                 d = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
@@ -41,14 +40,12 @@ class Engine:
 
     def _enrich(self, tf, x):
         x = x.copy()
-        # 15m is internal context for 5m; only 5m + 1h are user-facing signals.
         for htf, prefix in [('15m', 'ctx15'), ('1h', 'ctx1h')]:
-            needed = tf == '5m'
+            needed = (tf == '5m' and htf in ('15m', '1h')) or (tf == '15m' and htf == '1h')
             if needed:
                 try:
                     h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
-                    h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
-                    h['trend'] = 0
+                    h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
                     h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
                     h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
                     h = h.rename(columns={'trend':prefix+'_trend','rsi':prefix+'_rsi','macd_hist':prefix+'_macd_hist','dist_ema20':prefix+'_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
@@ -82,7 +79,10 @@ class Engine:
             if tf not in self.ai.models: diag['reject']='model_not_ready'; return None
             row=x.iloc[-2]; diag['candle_time']=row.name.isoformat(); diag['last_raw_time']=df.index[-1].isoformat()
             probs={'BUY':self.ai.probability(tf,row,'BUY'),'SELL':self.ai.probability(tf,row,'SELL')}; diag['buy_ai']=None if probs['BUY'] is None else round(probs['BUY'],4); diag['sell_ai']=None if probs['SELL'] is None else round(probs['SELL'],4)
-            ctx=self._context(tf,row.name); self.last_context[tf]=ctx; context={'trend':ctx.get('1h',{}).get('trend',0) if tf=='5m' else 0}
+            ctx=self._context(tf,row.name); self.last_context[tf]=ctx; context={'trend':0}
+            if tf=='5m':
+                t15=ctx.get('15m',{}).get('trend',0); t1h=ctx.get('1h',{}).get('trend',0); context['trend']=1 if t15>0 and t1h>0 else (-1 if t15<0 and t1h<0 else 0)
+            elif tf=='15m': context['trend']=ctx.get('1h',{}).get('trend',0)
             diag['context_trend']=context['trend']
             setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,MIN_SCORE,MIN_AI_PROB,context,diagnostics=diag)
             if not setup: self.last_diagnostics[tf]=diag; return None
@@ -149,12 +149,7 @@ class Engine:
         threading.Thread(target=self.scanner,daemon=True).start(); threading.Thread(target=self.monitor,daemon=True).start()
 
     def stats_text(self):
-        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info()
-        lines=['📊 <b>إحصائيات أداء البوت</b>','','🥇 <b>الذهب — TVC:GOLD</b>','']
-        for tf,label in [('5m','5 دقائق'),('1h','1 ساعة')]:
-            n,tw,tl=self.db.timeframe_closed_stats(tf); twr=100*tw/n if n else 0; tr=tw*RR-tl; open_n=self.db.timeframe_open_count(tf)
-            lines += [f'⏱️ <b>{label} ({tf})</b>',f'📌 إجمالي الصفقات المغلقة: <b>{n}</b>',f'✅ الصفقات الرابحة: <b>{tw}</b>',f'❌ الصفقات الخاسرة: <b>{tl}</b>',f'📈 نسبة الفوز: <b>{twr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{tr:+.1f}R</b>',f'🔓 صفقات مفتوحة: <b>{open_n}</b>','']
-        lines += ['📊 <b>الإجمالي</b>',f'📌 الصفقات المغلقة: <b>{total}</b>',f'✅ رابحة: <b>{w}</b>',f'❌ خاسرة: <b>{l}</b>',f'📈 نسبة الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
+        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info(); lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ رابحة: <b>%d</b>'%w,'❌ خاسرة: <b>%d</b>'%l,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
         for tf in TIMEFRAMES:
             v=m.get(tf,{})
             if v:
