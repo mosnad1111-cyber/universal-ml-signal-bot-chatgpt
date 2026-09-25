@@ -48,13 +48,13 @@ class Telegram:
 
     def keyboard(self):
         return {'inline_keyboard':[
-            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
-            [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
-            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
-            [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
+            [{'text':'🥇 تحليل 5 دقائق','callback_data':'scan:5m'}, {'text':'🥇 تحليل 1 ساعة','callback_data':'scan:1h'}],
+            [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 آخر الإشارات','callback_data':'recent'}],
+            [{'text':'🔎 تشخيص النظام','callback_data':'diagnostics'}, {'text':'🧪 Backtest 5m + 1H','callback_data':'backtest'}],
+            [{'text':'🟢 حالة البوت','callback_data':'status'}]
         ]}
 
-    def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\nاختر العملية من الأزرار بالأسفل 👇'
+    def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\n🥇 الذهب فقط | ⏱️ 5 دقائق + 1 ساعة\n\nاختر العملية من الأزرار بالأسفل 👇'
 
     def send_menu(self,cid):
         if not self.base: return False
