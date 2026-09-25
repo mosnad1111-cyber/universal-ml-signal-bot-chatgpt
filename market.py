@@ -17,10 +17,12 @@ except Exception as exc:
 else:
     _TV_IMPORT_ERROR = None
 
-PERIODS = {'5m': 5000, '1h': 5000}
+PERIODS = {'5m': 5000, '15m': 5000, '1h': 5000}
 FALLBACK_BARS = (5000, 2500, 1200, 600)
 INTERVALS = {
     '5m': 'in_5_minute',
+    # Internal-only context feed for the 5m model; not exposed as a signal timeframe.
+    '15m': 'in_15_minute',
     '1h': 'in_1_hour',
 }
 
