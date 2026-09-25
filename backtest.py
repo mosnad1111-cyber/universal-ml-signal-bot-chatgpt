@@ -132,10 +132,7 @@ class GoldBacktest:
     def run_all(self):
         out = {}
         bars_by_tf = {
-            '1m': BACKTEST_BARS_1M,
             '5m': BACKTEST_BARS_5M,
-            '15m': BACKTEST_BARS_15M,
-            '30m': BACKTEST_BARS_30M,
             '1h': BACKTEST_BARS_1H,
         }
         for tf in TIMEFRAMES:
