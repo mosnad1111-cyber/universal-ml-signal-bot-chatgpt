@@ -1,7 +1,7 @@
 import time
 import threading
 import requests
-from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS, BACKTEST_RETRAIN_EVERY
+from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY
 from backtest import GoldBacktest
 
 class Telegram:
@@ -44,8 +44,7 @@ class Telegram:
 
     def keyboard(self):
         return {'inline_keyboard':[
-            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
-            [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
+            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
@@ -70,14 +69,14 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
-        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 15m / 1H\nالشموع المستهدفة: {BACKTEST_BARS}\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
+        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 1H\nالشموع المستهدفة: 10,000 لكل فريم\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
         def work():
             try:
                 bt=GoldBacktest(); results={}
-                for tf in ('5m','15m','1h'):
-                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {BACKTEST_BARS} شمعة تقريبًا…',cid)
+                for tf, bars in (('5m', BACKTEST_BARS_5M), ('1h', BACKTEST_BARS_1H)):
+                    self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {bars:,} شمعة تقريبًا…',cid)
                     try:
-                        results[tf]=bt.run(tf,bars=BACKTEST_BARS,retrain_every=BACKTEST_RETRAIN_EVERY)
+                        results[tf]=bt.run(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY)
                         if results[tf].get('error'):
                             self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
                         else:
@@ -130,7 +129,7 @@ class Telegram:
                                 for s in rows:
                                     icon='🟢' if s['direction']=='BUY' else '🔴'; lines.append(f'{icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
                                 self.send('\n'.join(lines),cid)
-                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 15m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
+                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
             except Exception: time.sleep(5)
 
     def start(self,engine):
