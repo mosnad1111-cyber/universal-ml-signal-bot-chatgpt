@@ -11,4 +11,4 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TIMEFRAMES
-        value: 5m,15m,1h
+        value: 5m,1h
