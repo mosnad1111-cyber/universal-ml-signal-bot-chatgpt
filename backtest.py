@@ -104,6 +104,31 @@ class GoldBacktest:
         return out
 
     @staticmethod
+    def _period_groups(trades, start_time, end_time):
+        """Split trades by the midpoint of the actual tested time window."""
+        if not trades or start_time is None or end_time is None:
+            return []
+        midpoint = start_time + (end_time - start_time) / 2
+        buckets = {'النصف الأول': [], 'النصف الثاني': []}
+        for t in trades:
+            ts = pd.Timestamp(t['time'])
+            buckets['النصف الأول' if ts <= midpoint else 'النصف الثاني'].append(t)
+        out = []
+        for k in ('النصف الأول', 'النصف الثاني'):
+            a = buckets[k]
+            if not a:
+                continue
+            n = len(a)
+            w = sum(t['result'] == 'TP' for t in a)
+            net = sum(t['r'] for t in a)
+            gp = sum(max(t['r'], 0) for t in a)
+            gl = abs(sum(min(t['r'], 0) for t in a))
+            out.append({'key': k, 'n': n, 'wr': 100*w/n, 'net': net,
+                        'pf': gp/gl if gl else (float('inf') if gp else 0),
+                        'e': net/n})
+        return out
+
+    @staticmethod
     def _dd(trades):
         equity = peak = drawdown = 0.0
         for t in trades:
@@ -147,7 +172,7 @@ class GoldBacktest:
                     i = max(i+1, end_j+1); continue
             i += 1
         n = len(trades); w = sum(t['result']=='TP' for t in trades); net = sum(t['r'] for t in trades); gp = sum(max(t['r'],0) for t in trades); gl = abs(sum(min(t['r'],0) for t in trades))
-        res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
+        res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'periods':self._period_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
         self.last[tf] = res; return res
 
     def run_all(self):
@@ -185,7 +210,8 @@ class GoldBacktest:
             lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}',f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
-            lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+']) + ['']
+            lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
+            lines += ['🕒 <b>توزيع النتائج زمنيًا:</b>'] + GoldBacktest._fmt_groups(r.get('periods',[]),['النصف الأول','النصف الثاني']) + ['']
         gross_profit = sum(sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])) for tf in TIMEFRAMES)
         gross_loss = abs(sum(min(t.get('r', 0), 0) for tf in TIMEFRAMES for t in results.get(tf, {}).get('trades_detail', [])))
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
