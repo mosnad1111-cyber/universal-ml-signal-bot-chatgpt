@@ -56,6 +56,13 @@ class Engine:
                 x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
         return x
 
+    def _thresholds(self, tf):
+        if tf == '5m':
+            return MIN_SCORE_5M, MIN_AI_PROB_5M
+        if tf == '1h':
+            return MIN_SCORE_1H, MIN_AI_PROB_1H
+        return MIN_SCORE, MIN_AI_PROB
+
     def signal_text(self, s):
         side = '🟢 شراء' if s['direction'] == 'BUY' else '🔴 بيع'; p = s['ai_prob'] * 100
         return (f'🚨 <b>إشارة ذهب جديدة</b>\n\n🥇 <b>الذهب:</b> {TV_SYMBOL}\n⏱️ <b>الفريم:</b> {s["timeframe"]}\n📌 <b>الاتجاه:</b> {side}\n\n🎯 <b>الدخول:</b> {self.fmt(s["entry"])}\n🛑 <b>وقف الخسارة:</b> {self.fmt(s["sl"])}\n💰 <b>الهدف:</b> {self.fmt(s["tp"])}\n⚖️ <b>RR:</b> 1:{RR:g}\n🤖 <b>درجة الجودة:</b> {s["score"]:.1f}/100\n🧠 <b>تقدير AI:</b> {p:.1f}%\n🟡 <b>الحالة:</b> انتظار التفعيل\n\n⚠️ للتحليل والتنفيذ اليدوي فقط.')
@@ -84,7 +91,9 @@ class Engine:
                 t15=ctx.get('15m',{}).get('trend',0); t1h=ctx.get('1h',{}).get('trend',0); context['trend']=1 if t15>0 and t1h>0 else (-1 if t15<0 and t1h<0 else 0)
             elif tf=='15m': context['trend']=ctx.get('1h',{}).get('trend',0)
             diag['context_trend']=context['trend']
-            setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,MIN_SCORE,MIN_AI_PROB,context,diagnostics=diag)
+            min_score, min_ai = self._thresholds(tf)
+            diag['min_score_required']=min_score; diag['min_ai_required']=min_ai
+            setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,min_score,min_ai,context,diagnostics=diag)
             if not setup: self.last_diagnostics[tf]=diag; return None
             highs,lows=confirmed_pivots(df,PIVOT_LEN); rh=highs[-1][0] if highs else 0; rl=lows[-1][0] if lows else 0
             setup.update({'symbol':GOLD_DATA_SYMBOL,'timeframe':tf,'wave_key':f'{tf}:{rh}:{rl}:{setup["candle_time"]}'})
@@ -103,7 +112,8 @@ class Engine:
             diag['reject']=f'exception:{type(exc).__name__}:{exc}'; self.last_diagnostics[tf]=diag; raise
 
     def diagnostics_text(self):
-        lines=['🔎 <b>تشخيص محرك الإشارات</b>','']; labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج'}
+        lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
+        labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'AI Probability أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج'}
         for tf in TIMEFRAMES:
             d=self.last_diagnostics.get(tf,{})
             if not d: lines += [f'⏱️ <b>{tf}</b>: لم يتم الفحص بعد','']; continue
@@ -114,6 +124,8 @@ class Engine:
             if 'sell_ai' in d: lines.append(f'🔴 AI بيع: {d["sell_ai"]*100:.1f}%' if d['sell_ai'] is not None else '🔴 AI بيع: —')
             if 'buy_score' in d: lines.append(f'📈 Score شراء: {d["buy_score"]:.1f}')
             if 'sell_score' in d: lines.append(f'📉 Score بيع: {d["sell_score"]:.1f}')
+            if 'min_score_required' in d: lines.append(f'🎯 حد Score: {d["min_score_required"]:.0f}')
+            if 'min_ai_required' in d: lines.append(f'🧠 حد AI: {d["min_ai_required"]*100:.0f}%')
             if 'context_trend' in d: lines.append(f'🧭 اتجاه الفريمات الأعلى: {d["context_trend"]:+d}')
             if d.get('reject'): lines.append(f'❌ السبب: <b>{labels.get(d["reject"],d["reject"])}</b>')
             elif d.get('accepted'): lines.append('✅ النتيجة: تم قبول الإعداد وإرسال الإشارة')
