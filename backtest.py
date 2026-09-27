@@ -221,7 +221,8 @@ class GoldBacktest:
             row = x.iloc[i]
             probs = {'BUY':model.probability(tf,row,'BUY'), 'SELL':model.probability(tf,row,'SELL')}
             prefix = pd.concat([x.iloc[:i+1].copy(), row.to_frame().T], axis=0)
-            setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT, MIN_SCORE, MIN_AI_PROB, self._context(tf,row.name,x))
+            min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else (MIN_SCORE, MIN_AI_PROB)))
+            setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT, min_score, min_ai, self._context(tf,row.name,x))
             if setup:
                 start = raw.index.searchsorted(row.name, side='right'); result, end_j, act_j = self._resolve(raw, start, setup)
                 if result:
