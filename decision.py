@@ -15,7 +15,7 @@ def _clip01(v):
 
 
 def _score_direction(r, direction, ai_prob, ctx):
-    """Continuous 100-point score; AI ranks quality but does not hard-block it."""
+    """Continuous 100-point score; AI contributes to the score and is also thresholded before acceptance."""
     close = float(r['Close']); open_ = float(r['Open']); high = float(r['High']); low = float(r['Low'])
     atr = max(float(r['atr']), 1e-12)
     ema20 = float(r['ema20']); ema50 = float(r['ema50']); ema200 = float(r['ema200'])
@@ -72,13 +72,14 @@ def _score_direction(r, direction, ai_prob, ctx):
 
 
 def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
-                min_score=65, min_ai=0.58, context=None, diagnostics=None, min_gap=7.0):
+                min_score=65, min_ai=0.50, context=None, diagnostics=None, min_gap=7.0):
     diagnostics = diagnostics if diagnostics is not None else {}
     if len(df) < 220:
         diagnostics['reject'] = 'insufficient_bars'; return None
     r = df.iloc[-2]; atr = float(r['atr']); close = float(r['Close'])
     diagnostics.update({'bars': len(df), 'candle_time': r.name.isoformat(), 'close': close,
-                        'atr': atr, 'min_ai_required': float(min_ai), 'ai_is_ranking_only': True})
+                        'atr': atr, 'min_ai_required': float(min_ai), 'ai_is_ranking_only': False,
+                        'ai_threshold_active': True})
     if not math.isfinite(atr) or atr <= 0:
         diagnostics['reject'] = 'invalid_atr'; return None
 
@@ -91,10 +92,13 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         diagnostics[f'{direction.lower()}_ai'] = round(prob, 4)
         diagnostics[f'{direction.lower()}_score'] = round(score, 1)
         diagnostics[f'{direction.lower()}_ai_threshold_pass'] = prob >= float(min_ai)
+        if prob < float(min_ai):
+            diagnostics[f'{direction.lower()}_reject'] = 'ai_below_threshold'
+            continue
         candidates.append((score, direction, prob))
 
     if not candidates:
-        diagnostics['reject'] = 'no_model_probabilities'; return None
+        diagnostics['reject'] = 'ai_below_threshold'; return None
     candidates.sort(key=lambda z: z[0], reverse=True)
     score, direction, ai_prob = candidates[0]
     second_score = candidates[1][0] if len(candidates) > 1 else 0.0
