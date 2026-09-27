@@ -96,20 +96,20 @@ class Telegram:
 
     def _grid_search(self,cid):
         if self.backtest_running:
-            self.send('⏳ <b>يوجد اختبار يعمل حاليًا</b>\\nانتظر انتهاء الاختبار الحالي قبل تشغيل Grid Search.',cid); return
+            self.send('⏳ <b>يوجد اختبار يعمل حاليًا</b>\nانتظر انتهاء الاختبار الحالي قبل تشغيل Grid Search.',cid); return
         self.backtest_running=True
         total=len(GRID_SCORES)*len(GRID_AI_PROBS)*2
-        self.send(f'🔬 <b>بدأ Grid Search</b>\\n\\n5m + 1H\\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\\nإجمالي الاختبارات: {total}\\n\\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
+        self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
         def work():
             try:
                 bt=GoldBacktest(); grids={}
                 def progress(tf,done,total_tf,score,ai):
-                    self.send(f'🔬 <b>{tf}</b> — {done}/{total_tf}\\nScore {score:.0f} | AI {ai*100:.0f}%',cid)
+                    self.send(f'🔬 <b>{tf}</b> — {done}/{total_tf}\nScore {score:.0f} | AI {ai*100:.0f}%',cid)
                 for tf,bars in (('5m',BACKTEST_BARS_5M),('1h',BACKTEST_BARS_1H)):
                     grids[tf]=bt.run_grid(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY,progress=progress)
                 self.send_long(bt.format_grid_ar(grids),cid)
             except Exception as e:
-                self.send(f'❌ <b>فشل Grid Search</b>\\n{type(e).__name__}: {e}',cid)
+                self.send(f'❌ <b>فشل Grid Search</b>\n{type(e).__name__}: {e}',cid)
             finally:
                 self.backtest_running=False
         threading.Thread(target=work,daemon=True).start()
