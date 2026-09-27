@@ -22,3 +22,6 @@ BACKTEST_BARS_15M=int(os.getenv('BACKTEST_BARS_15M',str(BACKTEST_BARS)))
 BACKTEST_BARS_30M=int(os.getenv('BACKTEST_BARS_30M',str(BACKTEST_BARS)))
 BACKTEST_BARS_1H=int(os.getenv('BACKTEST_BARS_1H','10000'))
 BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','500'))
+# Grid search: threshold-only robustness test on the same walk-forward history.
+GRID_SCORES=(60,65,70,75)
+GRID_AI_PROBS=(0.40,0.45,0.50,0.55,0.60)
