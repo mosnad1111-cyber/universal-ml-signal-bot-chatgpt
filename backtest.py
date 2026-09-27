@@ -193,7 +193,7 @@ class GoldBacktest:
             equity += t['r']; peak = max(peak, equity); drawdown = max(drawdown, peak-equity)
         return drawdown
 
-    def run(self, tf, bars=None, retrain_every=None):
+    def run(self, tf, bars=None, retrain_every=None, min_score_override=None, min_ai_override=None):
         started = time.time()
         requested_bars = int(bars if bars is not None else {
             '1m': BACKTEST_BARS_1M,
@@ -222,6 +222,8 @@ class GoldBacktest:
             probs = {'BUY':model.probability(tf,row,'BUY'), 'SELL':model.probability(tf,row,'SELL')}
             prefix = pd.concat([x.iloc[:i+1].copy(), row.to_frame().T], axis=0)
             min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else (MIN_SCORE, MIN_AI_PROB)))
+            if min_score_override is not None: min_score = float(min_score_override)
+            if min_ai_override is not None: min_ai = float(min_ai_override)
             setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT, min_score, min_ai, self._context(tf,row.name,x))
             if setup:
                 start = raw.index.searchsorted(row.name, side='right'); result, end_j, act_j = self._resolve(raw, start, setup)
@@ -233,6 +235,62 @@ class GoldBacktest:
         n = len(trades); w = sum(t['result']=='TP' for t in trades); net = sum(t['r'] for t in trades); gp = sum(max(t['r'],0) for t in trades); gl = abs(sum(min(t['r'],0) for t in trades))
         res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'periods':self._period_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'quarters':self._quarter_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'sequence':self._sequence_stats(trades),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
         self.last[tf] = res; return res
+
+    def run_grid(self, tf, bars=None, retrain_every=None, scores=None, ai_probs=None, progress=None):
+        """Run a threshold-only grid on identical walk-forward data.
+
+        The XGBoost/model/risk logic is unchanged. Only the acceptance thresholds
+        are varied, so the resulting table measures threshold sensitivity rather
+        than silently changing the strategy.
+        """
+        scores = tuple(scores or GRID_SCORES)
+        ai_probs = tuple(ai_probs or GRID_AI_PROBS)
+        rows = []
+        total = len(scores) * len(ai_probs)
+        done = 0
+        for score in scores:
+            for ai in ai_probs:
+                done += 1
+                if progress:
+                    progress(tf, done, total, float(score), float(ai))
+                r = self.run(tf, bars=bars, retrain_every=retrain_every,
+                             min_score_override=score, min_ai_override=ai)
+                if r.get('error'):
+                    rows.append({'score':float(score), 'ai':float(ai), 'error':r.get('error')})
+                    continue
+                rows.append({
+                    'score': float(score), 'ai': float(ai),
+                    'trades': int(r.get('trades',0)),
+                    'win_rate': float(r.get('win_rate',0)),
+                    'net_r': float(r.get('net_r',0)),
+                    'pf': float(r.get('profit_factor',0)),
+                    'dd': float(r.get('max_drawdown_r',0)),
+                    'e': float(r.get('expectancy_r',0)),
+                    'raw_bars': int(r.get('raw_bars',0)),
+                    'usable_bars': int(r.get('usable_bars',0)),
+                    'partial': bool(r.get('history_partial',False)),
+                })
+        return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
+                'bars':int(bars if bars is not None else BACKTEST_BARS),
+                'trials':len(rows)}
+
+    @staticmethod
+    def format_grid_ar(grid_results):
+        lines = ['🔬 <b>اختبار عتبات Score / AI — Grid Search</b>',
+                 '', 'نفس بيانات Walk-Forward ونفس XGBoost ونفس إدارة الصفقة؛ التغيير الوحيد هو عتبات القبول.',
+                 '⚠️ ترتيب النتائج داخل العينة لا يعني ضمانًا مستقبليًا.', '']
+        for tf, g in grid_results.items():
+            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة', '']
+            rows = [r for r in g.get('rows',[]) if 'error' not in r]
+            rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
+            for r in rows:
+                pf = '∞' if np.isinf(r['pf']) else f"{r['pf']:.2f}"
+                lines.append(f"Score {r['score']:.0f} | AI {r['ai']*100:.0f}% | {r['trades']} ص | WR {r['win_rate']:.1f}% | Net {r['net_r']:+.1f}R | PF {pf} | DD {r['dd']:.1f}R | E {r['e']:+.2f}R")
+            errors = [r for r in g.get('rows',[]) if 'error' in r]
+            if errors:
+                lines += [f'❌ أخطاء: {len(errors)}']
+            lines.append('')
+        return '\\n'.join(lines)
 
     def run_all(self):
         out = {}
