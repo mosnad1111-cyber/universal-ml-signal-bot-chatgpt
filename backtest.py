@@ -129,6 +129,64 @@ class GoldBacktest:
         return out
 
     @staticmethod
+    def _sequence_stats(trades):
+        if not trades:
+            return {'max_win_streak': 0, 'max_loss_streak': 0, 'max_dd_r': 0.0,
+                    'dd_trough_trade': 0, 'dd_peak_trade': 0}
+        equity = peak = 0.0
+        max_dd = 0.0
+        peak_trade = trough_trade = 0
+        current_win = current_loss = 0
+        max_win = max_loss = 0
+        for idx, t in enumerate(trades, 1):
+            equity += t['r']
+            if equity > peak:
+                peak = equity
+                peak_trade = idx
+            dd = peak - equity
+            if dd > max_dd:
+                max_dd = dd
+                trough_trade = idx
+            if t['result'] == 'TP':
+                current_win += 1
+                current_loss = 0
+                max_win = max(max_win, current_win)
+            else:
+                current_loss += 1
+                current_win = 0
+                max_loss = max(max_loss, current_loss)
+        return {'max_win_streak': max_win, 'max_loss_streak': max_loss,
+                'max_dd_r': max_dd, 'dd_peak_trade': peak_trade,
+                'dd_trough_trade': trough_trade}
+
+    @staticmethod
+    def _quarter_groups(trades, start_time, end_time):
+        if not trades or start_time is None or end_time is None:
+            return []
+        span = end_time - start_time
+        if span.total_seconds() <= 0:
+            return []
+        buckets = {1: [], 2: [], 3: [], 4: []}
+        for t in trades:
+            ratio = (pd.Timestamp(t['time']) - start_time) / span
+            q = min(4, max(1, int(ratio * 4) + 1))
+            buckets[q].append(t)
+        out = []
+        for q in range(1, 5):
+            a = buckets[q]
+            if not a:
+                continue
+            n = len(a)
+            w = sum(t['result'] == 'TP' for t in a)
+            net = sum(t['r'] for t in a)
+            gp = sum(max(t['r'], 0) for t in a)
+            gl = abs(sum(min(t['r'], 0) for t in a))
+            out.append({'key': f'الربع {q}', 'n': n, 'wr': 100*w/n, 'net': net,
+                        'pf': gp/gl if gl else (float('inf') if gp else 0),
+                        'e': net/n})
+        return out
+
+    @staticmethod
     def _dd(trades):
         equity = peak = drawdown = 0.0
         for t in trades:
@@ -172,7 +230,7 @@ class GoldBacktest:
                     i = max(i+1, end_j+1); continue
             i += 1
         n = len(trades); w = sum(t['result']=='TP' for t in trades); net = sum(t['r'] for t in trades); gp = sum(max(t['r'],0) for t in trades); gl = abs(sum(min(t['r'],0) for t in trades))
-        res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'periods':self._period_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
+        res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'periods':self._period_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'quarters':self._quarter_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'sequence':self._sequence_stats(trades),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
         self.last[tf] = res; return res
 
     def run_all(self):
@@ -211,7 +269,10 @@ class GoldBacktest:
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
-            lines += ['🕒 <b>توزيع النتائج زمنيًا:</b>'] + GoldBacktest._fmt_groups(r.get('periods',[]),['النصف الأول','النصف الثاني']) + ['']
+            lines += ['🕒 <b>توزيع النتائج زمنيًا:</b>'] + GoldBacktest._fmt_groups(r.get('periods',[]),['النصف الأول','النصف الثاني'])
+            lines += ['📅 <b>حسب أرباع الفترة:</b>'] + GoldBacktest._fmt_groups(r.get('quarters',[]),['الربع 1','الربع 2','الربع 3','الربع 4'])
+            seq = r.get('sequence', {})
+            lines += [f"🔥 أطول سلسلة ربح: {seq.get('max_win_streak',0)}", f"🧊 أطول سلسلة خسارة: {seq.get('max_loss_streak',0)}", f"📉 أقصى سحب محسوب من تسلسل الصفقات: {seq.get('max_dd_r',0):.1f}R", '']
         gross_profit = sum(sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])) for tf in TIMEFRAMES)
         gross_loss = abs(sum(min(t.get('r', 0), 0) for tf in TIMEFRAMES for t in results.get(tf, {}).get('trades_detail', [])))
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
