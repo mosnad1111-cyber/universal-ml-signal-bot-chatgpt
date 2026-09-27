@@ -290,7 +290,7 @@ class GoldBacktest:
             if errors:
                 lines += [f'❌ أخطاء: {len(errors)}']
             lines.append('')
-        return '\\n'.join(lines)
+        return '\n'.join(lines)
 
     def run_all(self):
         out = {}
