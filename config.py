@@ -10,8 +10,8 @@ RR=float(os.getenv('RR','2.0')); PIVOT_LEN=int(os.getenv('PIVOT_LEN','5')); DIVI
 ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_ATR_MULT','1.15'))
 # Per-timeframe test thresholds.
 MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_AI_PROB','0.50'))
-MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','70')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.50'))
-MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','65')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.50'))
+MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','60')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.45'))
+MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','65')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.40'))
 MODEL_REFRESH_HOURS=float(os.getenv('MODEL_REFRESH_HOURS','6')); DB_PATH=os.getenv('DB_PATH','data/gold_bot.sqlite3')
 MODEL_HISTORY_BARS=int(os.getenv('MODEL_HISTORY_BARS','5000'))
 # Historical validation controls.
