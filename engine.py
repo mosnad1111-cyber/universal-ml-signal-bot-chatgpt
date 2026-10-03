@@ -71,7 +71,9 @@ class Engine:
         successes=0
         for tf in TIMEFRAMES:
             try:
-                x=self._enrich(tf,add_features(fetch(GOLD_DATA_SYMBOL,tf)).dropna()); ok=self.ai.fit(tf,x,RR); self.model_training_ok[tf]=bool(ok)
+                # Use the same requested history depth as the extended backtest.
+                x=self._enrich(tf,add_features(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS)).dropna())
+                ok=self.ai.fit(tf,x,RR); self.model_training_ok[tf]=bool(ok)
                 if ok: successes+=1
                 else: self.ai.errors.setdefault(tf,'fit_returned_false')
             except Exception as exc:
@@ -81,7 +83,7 @@ class Engine:
     def scan(self, tf):
         diag={'timeframe':tf,'scan_time':time.time(),'model_ready':tf in self.ai.models}; self.last_scan_at[tf]=diag['scan_time']; self.last_diagnostics[tf]=diag
         try:
-            df=fetch(GOLD_DATA_SYMBOL,tf); diag['raw_bars']=len(df); x=self._enrich(tf,add_features(df).dropna()); diag['feature_bars']=len(x)
+            df=fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS); diag['raw_bars']=len(df); x=self._enrich(tf,add_features(df).dropna()); diag['feature_bars']=len(x)
             if len(x)<300: diag['reject']='insufficient_feature_bars'; return None
             if tf not in self.ai.models: diag['reject']='model_not_ready'; return None
             row=x.iloc[-2]; diag['candle_time']=row.name.isoformat(); diag['last_raw_time']=df.index[-1].isoformat()
