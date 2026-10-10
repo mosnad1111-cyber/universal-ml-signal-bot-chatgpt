@@ -1,0 +1,45 @@
+name: PDH-PDL Gold Research Backtest
+
+on:
+  push:
+    branches:
+      - research/pdh-pdl-breakout-backtest
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run isolated backtest
+        shell: bash
+        run: |
+          set +e
+          python research/pdh_pdl_breakout_backtest.py --bars 5000 --cost-points 0.5 > research/backtest-run.log 2>&1
+          status=$?
+          cat research/backtest-run.log
+          exit $status
+      - name: Upload report and trade lists
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-pdh-pdl-backtest
+          path: |
+            research/backtest-run.log
+            research/results/summary.json
+            research/results/successful_breakouts.csv
+            research/results/false_breakouts.csv
+          if-no-files-found: warn
+          retention-days: 14
