@@ -1,6 +1,10 @@
 import time
 import threading
 import requests
+import subprocess
+import sys
+import json
+from pathlib import Path
 from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
 
@@ -8,7 +12,7 @@ class Telegram:
     def __init__(self, db=None):
         self.token=TELEGRAM_BOT_TOKEN
         self.base=f'https://api.telegram.org/bot{self.token}' if self.token else ''
-        self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False
+        self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False; self.research_backtest_running=False
         if self.db:
             saved=self.db.get_setting('telegram_chat_id')
             if saved:
@@ -48,10 +52,96 @@ class Telegram:
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
+            [{'text':'📈 اختبار قمة/قاع اليوم السابق (مستقل)','callback_data':'pdhpdl_menu'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
     def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\nاختر العملية من الأزرار بالأسفل 👇'
+
+    def research_keyboard(self):
+        return {'inline_keyboard':[
+            [{'text':'▶️ تشغيل اختبار قمة/قاع اليوم السابق','callback_data':'pdhpdl_run'}],
+            [{'text':'📘 قواعد الاختبار','callback_data':'pdhpdl_rules'}],
+            [{'text':'⬅️ القائمة الرئيسية','callback_data':'home'}]
+        ]}
+
+    def send_research_menu(self, cid):
+        text_msg=('📈 <b>اختبار استراتيجية قمة/قاع اليوم السابق</b>\n\n'
+                  'اختبار بحثي مستقل عن Backtest الأصلي وعن إشارات التداول الحية.\n'
+                  'البيانات: TVC:GOLD | مستويات اليوم السابق من فريم الساعة | الدخول من 5 دقائق.\n\n'
+                  'اختر تشغيل الاختبار أو عرض القواعد:')
+        try:
+            r=requests.post(self.base+'/sendMessage',json={'chat_id':cid,'text':text_msg,'parse_mode':'HTML','reply_markup':self.research_keyboard()},timeout=20)
+            return bool(r.ok and r.json().get('ok'))
+        except Exception: return False
+
+    def _pdhpdl_rules(self, cid):
+        self.send('📘 <b>قواعد اختبار قمة/قاع اليوم السابق</b>\n\n'
+          '• مصدر القمة والقاع: شموع 1H المكتملة، ويوم التداول من 17:00 إلى 17:00 بتوقيت نيويورك مع التوقيت الصيفي.\n'
+          '• الدخول على 5m فقط بين 09:30 و16:00 بتوقيت نيويورك.\n'
+          '• الاختراق الناجح: إغلاق خارج المستوى، ثم إعادة اختبار خلال 6 شموع، ثم شمعة تأكيد.\n'
+          '• الاختراق الكاذب: إغلاق خارج المستوى ثم عودة للداخل خلال 3 شموع، ثم إعادة اختبار وتأكيد عكسي.\n'
+          '• التأكيد: ابتلاع سعري أو شمعة رفض.\n'
+          '• وقف الخسارة: خلف المستوى بمقدار 0.10 × ATR(14)، والهدف 2R.\n'
+          '• إذا لمس السعر الوقف والهدف في الشمعة نفسها، تُحتسب خسارة تحفظيًا.\n'
+          '• تكلفة افتراضية للاختبار: 0.5 نقطة سعرية لكل صفقة ذهابًا وإيابًا؛ ليست سعر سبريد مؤكدًا.\n\n'
+          '⚠️ هذه نتائج بحثية وليست إشارات تداول، ولا تغيّر الاختبار الأصلي أو منطق البوت.',cid)
+
+    def _send_document(self, path, cid, caption):
+        try:
+            with open(path,'rb') as fh:
+                r=requests.post(self.base+'/sendDocument',data={'chat_id':cid,'caption':caption},files={'document':(Path(path).name,fh)},timeout=60)
+            return bool(r.ok and r.json().get('ok'))
+        except Exception as exc:
+            print(f'تعذر إرسال ملف الاختبار {path}: {exc}')
+            return False
+
+    def _pdhpdl_backtest(self, cid):
+        if self.research_backtest_running:
+            self.send('⏳ اختبار قمة/قاع اليوم السابق يعمل حاليًا. انتظر التقرير قبل تشغيله مرة أخرى.',cid); return
+        self.research_backtest_running=True
+        self.send('📈 <b>بدأ الاختبار البحثي المستقل</b>\n\n'
+          'سيجلب شموع TVC:GOLD لفريمَي 5m و1H، ثم يحسب الاختراق الناجح والكاذب كلًا على حدة.\n'
+          'الإعدادات: 5000 شمعة مطلوبة لكل فريم، هدف 2R، وتكلفة مفترضة 0.5 نقطة سعرية.\n\n'
+          '⏳ قد يستغرق عدة دقائق. الاختبار الأصلي وإشارات التداول الحية منفصلان عن هذه العملية.',cid)
+        def work():
+            try:
+                script=Path('research/pdh_pdl_breakout_backtest.py')
+                if not script.exists(): raise FileNotFoundError(f'ملف الاختبار غير موجود: {script}')
+                proc=subprocess.run([sys.executable,str(script),'--bars','5000','--cost-points','0.5'],
+                  capture_output=True,text=True,timeout=900)
+                if proc.returncode != 0:
+                    detail=(proc.stderr or proc.stdout or 'لا توجد تفاصيل إضافية')[-2800:]
+                    self.send('❌ <b>تعذر إكمال الاختبار البحثي</b>\n<pre>'+detail.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')+'</pre>',cid)
+                    return
+                report_path=Path('research/results/summary.json')
+                if not report_path.exists(): raise FileNotFoundError('انتهى السكربت دون إنشاء summary.json')
+                report=json.loads(report_path.read_text(encoding='utf-8'))
+                data=report.get('data',{}); results=report.get('results',{})
+                def block(title,key):
+                    r=results.get(key,{})
+                    return (f'<b>{title}</b>\nعدد الصفقات: {r.get("trades",0)} | الفوز: {r.get("wins",0)} | الخسارة: {r.get("losses",0)}\n'
+                      f'نسبة الفوز: {r.get("win_rate_pct",0):.2f}%\nصافي العائد: {r.get("net_R",0):+.3f}R | متوسط الصفقة: {r.get("expectancy_R",0):+.4f}R\n'
+                      f'Profit Factor: {r.get("profit_factor") if r.get("profit_factor") is not None else "غير متاح"}')
+                msg=('✅ <b>اكتمل اختبار قمة/قاع اليوم السابق</b>\n\n'
+                  +block('🟢 الاختراق الناجح','successful')+'\n\n'
+                  +block('🔴 الاختراق الكاذب','false')+'\n\n'
+                  +f'شموع 5m المستخدمة: {data.get("5m_rows",0)}\nشموع 1H المستخدمة: {data.get("1h_rows",0)}\n'
+                  +f'الفترة المتاحة 5m (UTC): {data.get("5m_first_utc") or "—"} إلى {data.get("5m_last_utc") or "—"}\n'
+                  +'التكلفة: 0.5 نقطة سعرية مفترضة لكل صفقة.\n'
+                  +'⚠️ اختبار تاريخي افتراضي؛ لا يضمن نتائج مستقبلية ولا يرسل أوامر تداول.')
+                self.send(msg,cid)
+                for path,caption in [
+                  ('research/results/summary.json','📊 ملخص نتائج الاختبار'),
+                  ('research/results/successful_breakouts.csv','🟢 صفقات الاختراق الناجح'),
+                  ('research/results/false_breakouts.csv','🔴 صفقات الاختراق الكاذب')]:
+                    if Path(path).exists(): self._send_document(path,cid,caption)
+            except subprocess.TimeoutExpired:
+                self.send('⌛ انتهت مهلة الاختبار (15 دقيقة). لم يتغير الاختبار الأصلي أو إشارات البوت.',cid)
+            except Exception as exc:
+                self.send(f'❌ تعذر تشغيل الاختبار المستقل: {type(exc).__name__}: {exc}',cid)
+            finally: self.research_backtest_running=False
+        threading.Thread(target=work,daemon=True).start()
 
     def send_menu(self,cid):
         if not self.base: return False
@@ -130,7 +220,11 @@ class Telegram:
                         cid=cb['message']['chat']['id']; self._remember_chat(cid); data=cb.get('data','')
                         try: requests.post(self.base+'/answerCallbackQuery',json={'callback_query_id':cb['id']},timeout=10)
                         except Exception: pass
-                        if data.startswith('scan:'):
+                        if data=='pdhpdl_menu': self.send_research_menu(cid)
+                        elif data=='pdhpdl_run': self._pdhpdl_backtest(cid)
+                        elif data=='pdhpdl_rules': self._pdhpdl_rules(cid)
+                        elif data=='home': self.send_menu(cid)
+                        elif data.startswith('scan:'):
                             tf=data.split(':',1)[1]
                             try:
                                 s=self.engine.scan(tf)
