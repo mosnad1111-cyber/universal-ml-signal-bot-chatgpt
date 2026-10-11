@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - feature/telegram-pdh-pdl-research
+      - fix/pdhpdl-confirmation-logic
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
