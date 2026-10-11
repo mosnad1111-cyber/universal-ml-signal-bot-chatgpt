@@ -39,19 +39,23 @@ def previous_day_levels(hourly):
         result[keys[i]] = (float(grouped.loc[keys[i-1], "PDH"]), float(grouped.loc[keys[i-1], "PDL"]))
     return result
 
-def bullish(prev, cur):
+def bullish_pattern(prev, cur):
+    """Return engulfing/rejection type, prioritizing engulfing for immediate entry."""
     rng=max(float(cur.High-cur.Low),1e-9); body=abs(float(cur.Close-cur.Open))
     wick=min(float(cur.Open),float(cur.Close))-float(cur.Low)
     engulf=cur.Close>cur.Open and prev.Close<prev.Open and cur.Open<=prev.Close and cur.Close>=prev.Open
+    if engulf: return "ENGULFING"
     reject=cur.Close>cur.Open and wick>=max(body*1.2,rng*.25) and cur.Close>=cur.Low+.65*rng
-    return bool(engulf or reject)
+    return "REJECTION" if reject else None
 
-def bearish(prev, cur):
+def bearish_pattern(prev, cur):
+    """Return engulfing/rejection type, prioritizing engulfing for immediate entry."""
     rng=max(float(cur.High-cur.Low),1e-9); body=abs(float(cur.Close-cur.Open))
     wick=float(cur.High)-max(float(cur.Open),float(cur.Close))
     engulf=cur.Close<cur.Open and prev.Close>prev.Open and cur.Open>=prev.Close and cur.Close<=prev.Open
+    if engulf: return "ENGULFING"
     reject=cur.Close<cur.Open and wick>=max(body*1.2,rng*.25) and cur.Close<=cur.Low+.35*rng
-    return bool(engulf or reject)
+    return "REJECTION" if reject else None
 
 def inside(close,pdh,pdl): return pdl <= close <= pdh
 
@@ -75,27 +79,60 @@ def exit_trade(df, ei, side, entry, stop, target, risk, cost):
 
 def backtest(df, levels, mode, cost):
     trades=[]; i=1; n=len(df)
-    while i<n-2:
+
+    def valid_bar(idx, day):
+        return idx < n and df.iloc[idx].trade_day == day and bool(df.iloc[idx].in_session)
+
+    def confirm_after_retest(retest_i, day, level, side, mode, pdh, pdl):
+        """Engulfing enters at its close; rejection requires next candle to close beyond its range."""
+        c_i = retest_i + 1
+        if not valid_bar(c_i, day): return None
+        q, c = df.iloc[retest_i], df.iloc[c_i]
+        if side == "LONG":
+            pattern = bullish_pattern(q, c)
+            level_ok = c.Close > level if mode == "successful" else pdl < c.Close <= pdh
+        else:
+            pattern = bearish_pattern(q, c)
+            level_ok = c.Close < level if mode == "successful" else pdl <= c.Close < pdh
+        if not level_ok or pattern is None: return None
+        if pattern == "ENGULFING":
+            return c_i, "ENGULFING"
+        # Non-engulfing rejection is only a setup. Require a separate close beyond
+        # the rejection candle's extreme to avoid treating every wick as confirmation.
+        d_i = c_i + 1
+        if not valid_bar(d_i, day): return None
+        d = df.iloc[d_i]
+        if side == "LONG" and d.Close > c.High and (d.Close > level if mode == "successful" else pdl < d.Close <= pdh):
+            return d_i, "REJECTION_CONFIRMED"
+        if side == "SHORT" and d.Close < c.Low and (d.Close < level if mode == "successful" else pdl <= d.Close < pdh):
+            return d_i, "REJECTION_CONFIRMED"
+        return None
+
+    while i<n-3:
         row,prev=df.iloc[i],df.iloc[i-1]; day=row.trade_day
-        if not row.in_session or day not in levels or not np.isfinite(row.ATR14) or row.ATR14<=0: i+=1; continue
+        if not row.in_session or day not in levels or not np.isfinite(row.ATR14) or row.ATR14<=0:
+            i+=1; continue
         pdh,pdl=levels[day]; tol=TOL_ATR*float(row.ATR14); setup=None
         if mode=="successful":
             if prev.Close<=pdh and row.Close>pdh:
-                for r in range(i+1,min(i+MAX_RETEST+1,n-1)):
+                for r in range(i+1,min(i+MAX_RETEST+1,n-2)):
                     q=df.iloc[r]
                     if q.trade_day!=day or not q.in_session: break
                     if q.Low<=pdh+tol and q.Close>=pdh:
-                        c=df.iloc[r+1]
-                        if c.trade_day==day and c.in_session and c.Close>pdh and bullish(q,c): setup=(r+1,"LONG",pdh,"SUCCESSFUL_UP_BREAKOUT")
-                        break
+                        confirmed=confirm_after_retest(r,day,pdh,"LONG",mode,pdh,pdl)
+                        if confirmed:
+                            ei,confirmation=confirmed
+                            setup=(ei,"LONG",pdh,"SUCCESSFUL_UP_BREAKOUT",confirmation); break
+                        # Do not stop at the first failed retest; later valid retests count.
             elif prev.Close>=pdl and row.Close<pdl:
-                for r in range(i+1,min(i+MAX_RETEST+1,n-1)):
+                for r in range(i+1,min(i+MAX_RETEST+1,n-2)):
                     q=df.iloc[r]
                     if q.trade_day!=day or not q.in_session: break
                     if q.High>=pdl-tol and q.Close<=pdl:
-                        c=df.iloc[r+1]
-                        if c.trade_day==day and c.in_session and c.Close<pdl and bearish(q,c): setup=(r+1,"SHORT",pdl,"SUCCESSFUL_DOWN_BREAKOUT")
-                        break
+                        confirmed=confirm_after_retest(r,day,pdl,"SHORT",mode,pdh,pdl)
+                        if confirmed:
+                            ei,confirmation=confirmed
+                            setup=(ei,"SHORT",pdl,"SUCCESSFUL_DOWN_BREAKOUT",confirmation); break
         else:
             if prev.Close<=pdh and row.Close>pdh:
                 back=None
@@ -104,13 +141,14 @@ def backtest(df, levels, mode, cost):
                     if q.trade_day!=day or not q.in_session: break
                     if inside(float(q.Close),pdh,pdl): back=k; break
                 if back is not None:
-                    for r in range(back+1,min(back+MAX_RETEST+1,n-1)):
+                    for r in range(back+1,min(back+MAX_RETEST+1,n-2)):
                         q=df.iloc[r]
                         if q.trade_day!=day or not q.in_session: break
                         if q.High>=pdh-tol and pdl<=q.Close<pdh:
-                            c=df.iloc[r+1]
-                            if c.trade_day==day and c.in_session and pdl<=c.Close<pdh and bearish(q,c): setup=(r+1,"SHORT",pdh,"FALSE_UP_BREAKOUT")
-                            break
+                            confirmed=confirm_after_retest(r,day,pdh,"SHORT",mode,pdh,pdl)
+                            if confirmed:
+                                ei,confirmation=confirmed
+                                setup=(ei,"SHORT",pdh,"FALSE_UP_BREAKOUT",confirmation); break
             elif prev.Close>=pdl and row.Close<pdl:
                 back=None
                 for k in range(i+1,min(i+MAX_FALSE_RETURN+1,n)):
@@ -118,22 +156,27 @@ def backtest(df, levels, mode, cost):
                     if q.trade_day!=day or not q.in_session: break
                     if inside(float(q.Close),pdh,pdl): back=k; break
                 if back is not None:
-                    for r in range(back+1,min(back+MAX_RETEST+1,n-1)):
+                    for r in range(back+1,min(back+MAX_RETEST+1,n-2)):
                         q=df.iloc[r]
                         if q.trade_day!=day or not q.in_session: break
                         if q.Low<=pdl+tol and pdl<q.Close<=pdh:
-                            c=df.iloc[r+1]
-                            if c.trade_day==day and c.in_session and pdl<c.Close<=pdh and bullish(q,c): setup=(r+1,"LONG",pdl,"FALSE_DOWN_BREAKOUT")
-                            break
-        if setup is None: i+=1; continue
-        ei,side,level,name=setup; er=df.iloc[ei]; entry=float(er.Close); buf=SL_BUFFER_ATR*float(er.ATR14)
+                            confirmed=confirm_after_retest(r,day,pdl,"LONG",mode,pdh,pdl)
+                            if confirmed:
+                                ei,confirmation=confirmed
+                                setup=(ei,"LONG",pdl,"FALSE_DOWN_BREAKOUT",confirmation); break
+        if setup is None:
+            i+=1; continue
+        ei,side,level,name,confirmation=setup
+        er=df.iloc[ei]; entry=float(er.Close); buf=SL_BUFFER_ATR*float(er.ATR14)
         stop=level-buf if side=="LONG" else level+buf; risk=abs(entry-stop)
         if not np.isfinite(risk) or risk<=0: i=ei+1; continue
         target=entry+RR*risk if side=="LONG" else entry-RR*risk
         ex=exit_trade(df,ei,side,entry,stop,target,risk,cost)
-        trades.append({"strategy":mode,"setup":name,"entry_time_utc":df.index[ei].isoformat(),"entry_time_ny":er.NY_time.isoformat(),
-          "side":side,"PDH":round(pdh,3),"PDL":round(pdl,3),"entry":round(entry,3),"SL":round(stop,3),"TP":round(target,3),
-          "risk_points":round(risk,4),**{k:v for k,v in ex.items() if k!="exit_i"}})
+        trades.append({"strategy":mode,"setup":name,"confirmation":confirmation,
+          "entry_time_utc":df.index[ei].isoformat(),"entry_time_ny":er.NY_time.isoformat(),
+          "side":side,"PDH":round(pdh,3),"PDL":round(pdl,3),"entry":round(entry,3),
+          "SL":round(stop,3),"TP":round(target,3),"risk_points":round(risk,4),
+          **{k:v for k,v in ex.items() if k!="exit_i"}})
         i=ex["exit_i"]+1
     return trades
 
@@ -159,7 +202,7 @@ def main():
         pd.DataFrame(ts).to_csv(OUT/f"{mode}_breakouts.csv",index=False)
     report={"symbol":"TVC:GOLD","signal_timeframe":"5m","levels_source":"1h candles; prior completed New York trading day 17:00–17:00, DST-aware",
       "entry_session":"09:30–16:00 America/New_York","retest_tolerance":"0.10 x 5m ATR(14)","stop_buffer":"0.10 x 5m ATR(14) beyond PDH/PDL","target":"2R",
-      "confirmation":"bullish/bearish engulfing or rejection candle","false_break_return_window_bars":MAX_FALSE_RETURN,"max_retest_window_bars":MAX_RETEST,
+      "confirmation":"engulfing enters at close; rejection requires next candle close beyond rejection candle high/low","false_break_return_window_bars":MAX_FALSE_RETURN,"max_retest_window_bars":MAX_RETEST,
       "same_bar_sl_tp_policy":"count as SL","trade_management":"one open trade per scenario; force close at 15:55 NY if still open",
       "assumed_round_trip_cost_points":a.cost_points,"data":{"5m_rows":int(len(df)),"1h_rows":int(len(hourly)),
       "5m_first_utc":df.index.min().isoformat() if len(df) else None,"5m_last_utc":df.index.max().isoformat() if len(df) else None,
