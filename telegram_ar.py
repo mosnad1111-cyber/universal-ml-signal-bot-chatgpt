@@ -70,7 +70,7 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
-        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 1H\nالشموع المستهدفة: 10,000 لكل فريم\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
+        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 15m / 1H\nالشموع المستهدفة: حسب إعداد كل فريم\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
         def work():
             try:
                 bt=GoldBacktest(); results={}
@@ -99,7 +99,7 @@ class Telegram:
             self.send('⏳ <b>يوجد اختبار يعمل حاليًا</b>\nانتظر انتهاء الاختبار الحالي قبل تشغيل Grid Search.',cid); return
         self.backtest_running=True
         total=len(GRID_SCORES)*len(GRID_AI_PROBS)*2
-        self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
+        self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 15m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
         def work():
             try:
                 bt=GoldBacktest(); grids={}
@@ -152,7 +152,7 @@ class Telegram:
                                 for s in rows:
                                     icon='🟢' if s['direction']=='BUY' else '🔴'; lines.append(f'{icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
                                 self.send('\n'.join(lines),cid)
-                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
+                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 15m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
             except Exception: time.sleep(5)
 
     def start(self,engine):
