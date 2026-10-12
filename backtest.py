@@ -215,7 +215,7 @@ class GoldBacktest:
         warmup = 700; step = max(200, retrain_every); trades = []; model = GoldAI(); last_fit = -1; i = warmup
         while i < len(x)-1:
             if last_fit < 0 or i-last_fit >= step:
-                model = GoldAI(); ok = model.fit(tf, x.iloc[:i], RR)
+                model = GoldAI(); ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR, sl_atr_mult=SL_ATR_MULT)
                 if not ok: i += 1; continue
                 last_fit = i
             row = x.iloc[i]

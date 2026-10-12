@@ -19,6 +19,8 @@ class Engine:
         self.last_diagnostics = {tf: {} for tf in TIMEFRAMES}
         self.last_scan_at = {tf: 0 for tf in TIMEFRAMES}
         self.model_training_ok = {}
+        self.scan_counts = {tf: 0 for tf in TIMEFRAMES}
+        self.reject_counts = {tf: {} for tf in TIMEFRAMES}
 
     def fmt(self, n): return f'{float(n):,.2f}'
     def _completed(self, df): return df.iloc[:-1].copy() if len(df) > 1 else df
@@ -44,7 +46,7 @@ class Engine:
             needed = (tf == '5m' and htf in ('15m', '1h')) or (tf == '15m' and htf == '1h')
             if needed:
                 try:
-                    h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
+                    h = add_features(self._completed(fetch(GOLD_DATA_SYMBOL, htf))).dropna()
                     h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
                     h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
                     h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
@@ -72,8 +74,9 @@ class Engine:
         for tf in TIMEFRAMES:
             try:
                 # Use the same requested history depth as the extended backtest.
-                x=self._enrich(tf,add_features(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS)).dropna())
-                ok=self.ai.fit(tf,x,RR); self.model_training_ok[tf]=bool(ok)
+                history = self._completed(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS))
+                x=self._enrich(tf,add_features(history).dropna())
+                ok=self.ai.fit(tf,x,RR,divisor=DIVISOR,sl_atr_mult=SL_ATR_MULT); self.model_training_ok[tf]=bool(ok)
                 if ok: successes+=1
                 else: self.ai.errors.setdefault(tf,'fit_returned_false')
             except Exception as exc:
@@ -113,13 +116,25 @@ class Engine:
         except Exception as exc:
             diag['reject']=f'exception:{type(exc).__name__}:{exc}'; self.last_diagnostics[tf]=diag; raise
 
+    def _record_scan_outcome(self, tf):
+        """Keep cumulative scan/rejection counts so one last snapshot doesn't hide patterns."""
+        self.scan_counts[tf] = self.scan_counts.get(tf, 0) + 1
+        d = self.last_diagnostics.get(tf, {})
+        reason = d.get('reject')
+        if reason:
+            counts = self.reject_counts.setdefault(tf, {})
+            counts[reason] = counts.get(reason, 0) + 1
+
     def diagnostics_text(self):
         lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
-        labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'AI Probability أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج'}
+        labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'احتمال AI أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج','direction_ambiguous':'اتجاه الشراء والبيع غير واضح','against_higher_timeframe_trend':'الإشارة تعاكس اتجاه الفريم الأعلى','invalid_atr':'قيمة ATR غير صالحة','invalid_risk':'المخاطرة غير صالحة','insufficient_bars':'عدد الشموع غير كافٍ'}
         for tf in TIMEFRAMES:
             d=self.last_diagnostics.get(tf,{})
             if not d: lines += [f'⏱️ <b>{tf}</b>: لم يتم الفحص بعد','']; continue
             lines.append(f'⏱️ <b>{tf}</b>'); lines.append(f'🤖 النموذج: {"جاهز" if d.get("model_ready") else "غير جاهز"}')
+            lines.append(f'🔁 مرات الفحص المسجلة: {self.scan_counts.get(tf, 0)}')
+            common_rejects = sorted(self.reject_counts.get(tf, {}).items(), key=lambda z: z[1], reverse=True)[:3]
+            if common_rejects: lines.append('📉 أكثر أسباب الرفض: ' + '، '.join(f'{labels.get(k, k)} ({v})' for k, v in common_rejects))
             if 'raw_bars' in d: lines.append(f'📚 البيانات: {d["raw_bars"]} شمعة')
             if 'candle_time' in d: lines.append(f'🕐 الشمعة: {d["candle_time"]}')
             if 'buy_ai' in d: lines.append(f'🟢 AI شراء: {d["buy_ai"]*100:.1f}%' if d['buy_ai'] is not None else '🟢 AI شراء: —')
@@ -154,8 +169,12 @@ class Engine:
             try:
                 if time.time()-self.last_model>MODEL_REFRESH_HOURS*3600 or not self.ai.models: self.train_models()
                 for tf in TIMEFRAMES:
-                    try: self.scan(tf)
-                    except Exception: traceback.print_exc()
+                    try:
+                        self.scan(tf)
+                        self._record_scan_outcome(tf)
+                    except Exception:
+                        self._record_scan_outcome(tf)
+                        traceback.print_exc()
             except Exception: traceback.print_exc()
             time.sleep(SCAN_SECONDS)
 
@@ -168,7 +187,7 @@ class Engine:
             v=m.get(tf,{})
             if v:
                 lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}')
-                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f}')
+                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f} | شموع عزل: {v.get("purged_candles",0)}')
                 if 'buy_auc' in v or 'sell_auc' in v: lines.append(f'   AUC شراء: {v.get("buy_auc",0):.3f} | AUC بيع: {v.get("sell_auc",0):.3f}')
                 lines.append(f'   Brier: {v.get("validation_brier",0):.4f}')
                 top=v.get('top_features',[])

@@ -20,41 +20,75 @@ CONTEXT_FEATURES = [
 FEATURES = BASE_FEATURES + CONTEXT_FEATURES + ['direction']
 
 
-def _label_direction(x, direction, horizon, rr=2.0):
+def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.15):
+    """Label the outcome of the same entry/SL/TP geometry used by live build_setup.
+
+    The label is attached to the signal candle. Entry activation and exits are
+    evaluated only on subsequent candles, matching the live monitor/backtest.
+    """
     y = np.full(len(x), np.nan)
-    close = x['Close'].to_numpy(); high = x['High'].to_numpy(); low = x['Low'].to_numpy(); atr = x['atr'].to_numpy()
-    for i in range(max(0, len(x) - horizon - 1)):
-        if not np.isfinite(atr[i]) or atr[i] <= 0:
+    close = x['Close'].to_numpy(dtype=float)
+    high = x['High'].to_numpy(dtype=float)
+    low = x['Low'].to_numpy(dtype=float)
+    atr = x['atr'].to_numpy(dtype=float)
+    high20 = x['high20'].to_numpy(dtype=float)
+    low20 = x['low20'].to_numpy(dtype=float)
+
+    if not np.isfinite(divisor) or divisor <= 0 or not np.isfinite(sl_atr_mult) or sl_atr_mult <= 0:
+        raise ValueError("divisor and sl_atr_mult must be positive finite numbers")
+
+    for i in range(max(0, len(x) - horizon)):
+        if not all(np.isfinite(v) for v in (close[i], atr[i], high20[i], low20[i])) or atr[i] <= 0:
             continue
-        risk = float(atr[i])
+
+        span = max(high20[i] - low20[i], atr[i])
         if direction == 1:
-            target, stop = close[i] + rr*risk, close[i] - risk
+            entry = max(close[i], low20[i] + span / divisor)
+            stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i])
+            risk = entry - stop
+            target = entry + rr * risk
         else:
-            target, stop = close[i] - rr*risk, close[i] + risk
-        outcome = None
-        for j in range(i+1, min(len(x), i+horizon+1)):
+            entry = min(close[i], high20[i] - span / divisor)
+            stop = max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
+            risk = stop - entry
+            target = entry - rr * risk
+
+        risk_atr = risk / atr[i]
+        # Match the live setup's risk sanity filter; non-tradable geometries
+        # must not become positive training examples.
+        if not np.isfinite(risk_atr) or risk_atr < 0.55 or risk_atr > 3.0:
+            continue
+
+        active = False
+        for j in range(i + 1, min(len(x), i + horizon + 1)):
+            if not active:
+                if not (low[j] <= entry <= high[j]):
+                    continue
+                active = True
+
             hit_target = high[j] >= target if direction == 1 else low[j] <= target
             hit_stop = low[j] <= stop if direction == 1 else high[j] >= stop
-            # Ambiguous OHLC bar: conservatively call it a loss.
+            # If both levels are inside one OHLC candle, conservatively count SL.
             if hit_target and hit_stop:
-                outcome = 0; break
-            if hit_target:
-                outcome = 1; break
+                y[i] = 0
+                break
             if hit_stop:
-                outcome = 0; break
-        if outcome is not None:
-            y[i] = outcome
+                y[i] = 0
+                break
+            if hit_target:
+                y[i] = 1
+                break
     return pd.Series(y, index=x.index)
-
 
 class GoldAI:
     def __init__(self):
         self.models = {}; self.metrics = {}; self.trained_at = {}; self.errors = {}
 
-    def fit(self, timeframe, raw_df, rr=2.0, feedback=None):
+    def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15):
         x = raw_df.copy()
         horizons = {'5m': 36, '15m': 24, '1h': 18}
-        labels = {d: _label_direction(x, d, horizons.get(timeframe, 24), rr) for d in (1, 0)}
+        horizon = horizons.get(timeframe, 24)
+        labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult) for d in (1, 0)}
         base = x[FEATURES[:-1]].copy()
         base_valid = base.notna().all(axis=1)
 
@@ -72,10 +106,18 @@ class GoldAI:
         if split_pos <= 0 or split_pos >= len(all_valid_idx):
             self.errors[timeframe] = 'invalid_temporal_split'; return False
         split_time = all_valid_idx[split_pos]
+
+        # Purge training samples whose forward outcome window could overlap the
+        # validation period. Use the full candle index (not only labeled rows).
+        split_loc = int(x.index.get_indexer([split_time])[0])
+        purge_loc = max(0, split_loc - horizon)
+        purge_time = x.index[purge_loc]
+        purged_candles = max(0, split_loc - purge_loc)
+
         train_parts=[]; val_parts=[]
         for direction in (1, 0):
             idx = base.index[valid_by_direction[direction]]
-            train_idx = idx[idx < split_time]
+            train_idx = idx[idx < purge_time]
             val_idx = idx[idx >= split_time]
             if len(train_idx):
                 d=base.loc[train_idx].copy(); d['direction']=direction; d['_label']=labels[direction].loc[train_idx].astype(int).values; train_parts.append(d)
@@ -101,7 +143,7 @@ class GoldAI:
         val_direction=val['direction'].to_numpy()
         metrics={
             'engine':engine,'training_rows':int(len(Xtr)),'validation_rows':int(len(Xv)),
-            'training_candles':int(len(set(train.index))),'validation_candles':int(len(set(val.index))),
+            'training_candles':int(len(set(train.index))),'validation_candles':int(len(set(val.index))),'purged_candles':int(purged_candles),
             'auc':float(roc_auc_score(yv,pv)) if yv.nunique()==2 else 0.5,
             'accuracy':float(accuracy_score(yv,(pv>=0.5).astype(int))),
             'positive_rate':float(ytr.mean()),'validation_positive_rate':float(yv.mean()),
