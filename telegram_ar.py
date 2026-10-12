@@ -1,7 +1,7 @@
 import time
 import threading
 import requests
-from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
+from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
 
 class Telegram:
@@ -44,7 +44,8 @@ class Telegram:
 
     def keyboard(self):
         return {'inline_keyboard':[
-            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
+            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
+            [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
@@ -74,7 +75,7 @@ class Telegram:
         def work():
             try:
                 bt=GoldBacktest(); results={}
-                for tf, bars in (('5m', BACKTEST_BARS_5M), ('1h', BACKTEST_BARS_1H)):
+                for tf, bars in (('5m', BACKTEST_BARS_5M), ('15m', BACKTEST_BARS_15M), ('1h', BACKTEST_BARS_1H)):
                     self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {bars:,} شمعة تقريبًا…',cid)
                     try:
                         results[tf]=bt.run(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY)
@@ -98,14 +99,14 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>يوجد اختبار يعمل حاليًا</b>\nانتظر انتهاء الاختبار الحالي قبل تشغيل Grid Search.',cid); return
         self.backtest_running=True
-        total=len(GRID_SCORES)*len(GRID_AI_PROBS)*2
+        total=len(GRID_SCORES)*len(GRID_AI_PROBS)*3
         self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 15m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
         def work():
             try:
                 bt=GoldBacktest(); grids={}
                 def progress(tf,done,total_tf,score,ai):
                     self.send(f'🔬 <b>{tf}</b> — {done}/{total_tf}\nScore {score:.0f} | AI {ai*100:.0f}%',cid)
-                for tf,bars in (('5m',BACKTEST_BARS_5M),('1h',BACKTEST_BARS_1H)):
+                for tf,bars in (('5m',BACKTEST_BARS_5M),('15m',BACKTEST_BARS_15M),('1h',BACKTEST_BARS_1H)):
                     grids[tf]=bt.run_grid(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY,progress=progress)
                 self.send_long(bt.format_grid_ar(grids),cid)
             except Exception as e:
