@@ -7,7 +7,7 @@ from ai_engine import _label_direction
 
 class TradeLabelAlignmentTests(unittest.TestCase):
     def _frame(self, future_rows):
-        # First candle produces a buy entry near 95.56 with risk under 3 ATR.
+        # First candle produces a buy entry at 95.0 with risk exactly 3 ATR.
         rows = [{
             "Close": 95.0, "High": 96.0, "Low": 94.0,
             "atr": 2.0, "high20": 100.0, "low20": 90.0,
