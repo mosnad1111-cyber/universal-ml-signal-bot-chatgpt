@@ -46,7 +46,7 @@ class Engine:
             needed = (tf == '5m' and htf in ('15m', '1h')) or (tf == '15m' and htf == '1h')
             if needed:
                 try:
-                    h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
+                    h = add_features(self._completed(fetch(GOLD_DATA_SYMBOL, htf))).dropna()
                     h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy(); h['trend'] = 0
                     h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
                     h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
@@ -74,7 +74,8 @@ class Engine:
         for tf in TIMEFRAMES:
             try:
                 # Use the same requested history depth as the extended backtest.
-                x=self._enrich(tf,add_features(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS)).dropna())
+                history = self._completed(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS))
+                x=self._enrich(tf,add_features(history).dropna())
                 ok=self.ai.fit(tf,x,RR,divisor=DIVISOR,sl_atr_mult=SL_ATR_MULT); self.model_training_ok[tf]=bool(ok)
                 if ok: successes+=1
                 else: self.ai.errors.setdefault(tf,'fit_returned_false')
