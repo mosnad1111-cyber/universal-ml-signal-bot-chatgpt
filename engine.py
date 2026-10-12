@@ -127,7 +127,7 @@ class Engine:
 
     def diagnostics_text(self):
         lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
-        labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'AI Probability أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج'}
+        labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'احتمال AI أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج','direction_ambiguous':'اتجاه الشراء والبيع غير واضح','against_higher_timeframe_trend':'الإشارة تعاكس اتجاه الفريم الأعلى','invalid_atr':'قيمة ATR غير صالحة','invalid_risk':'المخاطرة غير صالحة','insufficient_bars':'عدد الشموع غير كافٍ'}
         for tf in TIMEFRAMES:
             d=self.last_diagnostics.get(tf,{})
             if not d: lines += [f'⏱️ <b>{tf}</b>: لم يتم الفحص بعد','']; continue
@@ -187,7 +187,7 @@ class Engine:
             v=m.get(tf,{})
             if v:
                 lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}')
-                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f}')
+                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f} | شموع عزل: {v.get("purged_candles",0)}')
                 if 'buy_auc' in v or 'sell_auc' in v: lines.append(f'   AUC شراء: {v.get("buy_auc",0):.3f} | AUC بيع: {v.get("sell_auc",0):.3f}')
                 lines.append(f'   Brier: {v.get("validation_brier",0):.4f}')
                 top=v.get('top_features',[])
