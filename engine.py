@@ -19,6 +19,8 @@ class Engine:
         self.last_diagnostics = {tf: {} for tf in TIMEFRAMES}
         self.last_scan_at = {tf: 0 for tf in TIMEFRAMES}
         self.model_training_ok = {}
+        self.scan_counts = {tf: 0 for tf in TIMEFRAMES}
+        self.reject_counts = {tf: {} for tf in TIMEFRAMES}
 
     def fmt(self, n): return f'{float(n):,.2f}'
     def _completed(self, df): return df.iloc[:-1].copy() if len(df) > 1 else df
@@ -113,6 +115,15 @@ class Engine:
         except Exception as exc:
             diag['reject']=f'exception:{type(exc).__name__}:{exc}'; self.last_diagnostics[tf]=diag; raise
 
+    def _record_scan_outcome(self, tf):
+        """Keep cumulative scan/rejection counts so one last snapshot doesn't hide patterns."""
+        self.scan_counts[tf] = self.scan_counts.get(tf, 0) + 1
+        d = self.last_diagnostics.get(tf, {})
+        reason = d.get('reject')
+        if reason:
+            counts = self.reject_counts.setdefault(tf, {})
+            counts[reason] = counts.get(reason, 0) + 1
+
     def diagnostics_text(self):
         lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
         labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'AI Probability أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'عدد الشموع غير كافٍ','no_model_probabilities':'لا توجد نتيجة من النموذج'}
@@ -120,6 +131,9 @@ class Engine:
             d=self.last_diagnostics.get(tf,{})
             if not d: lines += [f'⏱️ <b>{tf}</b>: لم يتم الفحص بعد','']; continue
             lines.append(f'⏱️ <b>{tf}</b>'); lines.append(f'🤖 النموذج: {"جاهز" if d.get("model_ready") else "غير جاهز"}')
+            lines.append(f'🔁 مرات الفحص المسجلة: {self.scan_counts.get(tf, 0)}')
+            common_rejects = sorted(self.reject_counts.get(tf, {}).items(), key=lambda z: z[1], reverse=True)[:3]
+            if common_rejects: lines.append('📉 أكثر أسباب الرفض: ' + '، '.join(f'{labels.get(k, k)} ({v})' for k, v in common_rejects))
             if 'raw_bars' in d: lines.append(f'📚 البيانات: {d["raw_bars"]} شمعة')
             if 'candle_time' in d: lines.append(f'🕐 الشمعة: {d["candle_time"]}')
             if 'buy_ai' in d: lines.append(f'🟢 AI شراء: {d["buy_ai"]*100:.1f}%' if d['buy_ai'] is not None else '🟢 AI شراء: —')
@@ -154,8 +168,12 @@ class Engine:
             try:
                 if time.time()-self.last_model>MODEL_REFRESH_HOURS*3600 or not self.ai.models: self.train_models()
                 for tf in TIMEFRAMES:
-                    try: self.scan(tf)
-                    except Exception: traceback.print_exc()
+                    try:
+                        self.scan(tf)
+                        self._record_scan_outcome(tf)
+                    except Exception:
+                        self._record_scan_outcome(tf)
+                        traceback.print_exc()
             except Exception: traceback.print_exc()
             time.sleep(SCAN_SECONDS)
 
