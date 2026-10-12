@@ -73,7 +73,7 @@ class Engine:
             try:
                 # Use the same requested history depth as the extended backtest.
                 x=self._enrich(tf,add_features(fetch(GOLD_DATA_SYMBOL,tf,period=MODEL_HISTORY_BARS)).dropna())
-                ok=self.ai.fit(tf,x,RR); self.model_training_ok[tf]=bool(ok)
+                ok=self.ai.fit(tf,x,RR,divisor=DIVISOR,sl_atr_mult=SL_ATR_MULT); self.model_training_ok[tf]=bool(ok)
                 if ok: successes+=1
                 else: self.ai.errors.setdefault(tf,'fit_returned_false')
             except Exception as exc:
