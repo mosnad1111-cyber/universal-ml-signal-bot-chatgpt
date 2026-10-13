@@ -311,7 +311,7 @@ class GoldBacktest:
         gl = abs(sum(min(t['r'], 0) for t in trades))
         res = {
             'timeframe': tf, 'requested_bars': requested_bars,
-            'raw_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
+            'raw_bars': prepared['received_bars'], 'usable_bars': len(x), 'bars': len(x),
             'history_partial': history_partial, 'trades': n, 'wins': w,
             'losses': n-w, 'win_rate': 100*w/n if n else 0, 'net_r': net,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
@@ -382,7 +382,7 @@ class GoldBacktest:
                     'partial': bool(r.get('history_partial',False)),
                 })
         return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
-                'bars':requested_bars, 'raw_bars':len(prepared['raw']),
+                'bars':requested_bars, 'raw_bars':prepared['received_bars'],
                 'usable_bars':len(prepared['features']),
                 'history_partial':prepared['history_partial'],
                 'snapshot_start':prepared['features'].index[0].isoformat() if len(prepared['features']) else None,
