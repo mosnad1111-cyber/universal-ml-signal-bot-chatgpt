@@ -77,8 +77,7 @@ class GridSnapshotTests(unittest.TestCase):
         with _CACHE_LOCK:
             _SNAPSHOT_CACHE.pop(("1h", 321), None)
 
-        with patch("backtest.fetch", return_value=frame) as fetch, \\
-             patch("backtest.add_features", side_effect=lambda df: df):
+        with patch("backtest.fetch", return_value=frame) as fetch, patch("backtest.add_features", side_effect=lambda df: df):
             first_bt = GoldBacktest()
             first_bt._enrich = lambda tf, df: df
             first = first_bt._prepare("1h", 321)
@@ -93,7 +92,7 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(first["snapshot_id"], second["snapshot_id"])
         self.assertEqual(first["received_bars"], 4)
         self.assertEqual(len(first["raw"]), 3)
-        self.assertEqual(first["snapshot_start"], second["snapshot_start"]) if "snapshot_start" in first else None
+        self.assertEqual(first["snapshot_start"], second["snapshot_start"])
 
 
 if __name__ == "__main__":
