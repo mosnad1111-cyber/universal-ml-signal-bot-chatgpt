@@ -266,9 +266,7 @@ class GoldBacktest:
                     'usable_bars':len(x), 'history_partial':history_partial}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every))
-        min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
-                             ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else
-                              (MIN_SCORE, MIN_AI_PROB)))
+        min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
             min_score = float(min_score_override)
         if min_ai_override is not None:
@@ -328,6 +326,8 @@ class GoldBacktest:
             'quarters': self._quarter_groups(trades, x.index[0] if len(x) else None,
                                              x.index[-1] if len(x) else None),
             'sequence': self._sequence_stats(trades),
+            'snapshot_start': x.index[0].isoformat() if len(x) else None,
+            'snapshot_end': x.index[-1].isoformat() if len(x) else None,
             'elapsed_s': round(time.time()-started, 1),
             'trades_detail': trades[-100:],
         }
