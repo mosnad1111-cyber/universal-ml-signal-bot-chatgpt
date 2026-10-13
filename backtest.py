@@ -193,25 +193,49 @@ class GoldBacktest:
             equity += t['r']; peak = max(peak, equity); drawdown = max(drawdown, peak-equity)
         return drawdown
 
-    def run(self, tf, bars=None, retrain_every=None, min_score_override=None, min_ai_override=None):
-        started = time.time()
-        requested_bars = int(bars if bars is not None else {
+    @staticmethod
+    def _requested_bars(tf, bars=None):
+        return int(bars if bars is not None else {
             '1m': BACKTEST_BARS_1M,
             '5m': BACKTEST_BARS_5M,
             '15m': BACKTEST_BARS_15M,
             '30m': BACKTEST_BARS_30M,
             '1h': BACKTEST_BARS_1H,
         }.get(tf, BACKTEST_BARS))
-        retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+
+    def _prepare(self, tf, requested_bars):
+        """Fetch and prepare one immutable data snapshot for a timeframe.
+
+        Grid Search must compare thresholds against this exact snapshot, including
+        the higher-timeframe context, rather than refetching data per combination.
+        """
         raw = fetch(GOLD_DATA_SYMBOL, tf, period=requested_bars)
         received_bars = len(raw)
         history_partial = received_bars < requested_bars
-        # Run on all history TradingView actually returned instead of discarding a partial window.
         if len(raw) > requested_bars:
             raw = raw.iloc[-requested_bars:].copy()
         raw = self._completed(raw)
         x = self._enrich(tf, add_features(raw).dropna())
-        if len(x) < 1200: return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}', 'requested_bars':requested_bars, 'raw_bars':len(raw), 'usable_bars':len(x)}
+        return {
+            'raw': raw.copy(),
+            'features': x.copy(),
+            'requested_bars': requested_bars,
+            'received_bars': received_bars,
+            'history_partial': history_partial,
+        }
+
+    def run(self, tf, bars=None, retrain_every=None, min_score_override=None, min_ai_override=None, _prepared=None):
+        started = time.time()
+        requested_bars = self._requested_bars(tf, bars)
+        retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+        prepared = _prepared if _prepared is not None else self._prepare(tf, requested_bars)
+        raw = prepared['raw']
+        x = prepared['features']
+        history_partial = prepared['history_partial']
+        if len(x) < 1200:
+            return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}',
+                    'requested_bars':requested_bars, 'raw_bars':len(raw),
+                    'usable_bars':len(x), 'history_partial':history_partial}
         warmup = 700; step = max(200, retrain_every); trades = []; model = GoldAI(); last_fit = -1; i = warmup
         while i < len(x)-1:
             if last_fit < 0 or i-last_fit >= step:
@@ -248,13 +272,20 @@ class GoldBacktest:
         rows = []
         total = len(scores) * len(ai_probs)
         done = 0
+        # Fetch, feature-engineer, and align higher-timeframe context once.
+        # Every threshold combination reuses this exact snapshot. Model training
+        # is deterministic (fixed random_state) so thresholds are the only
+        # variable affecting trade acceptance.
+        requested_bars = self._requested_bars(tf, bars)
+        prepared = self._prepare(tf, requested_bars)
         for score in scores:
             for ai in ai_probs:
                 done += 1
                 if progress:
                     progress(tf, done, total, float(score), float(ai))
-                r = self.run(tf, bars=bars, retrain_every=retrain_every,
-                             min_score_override=score, min_ai_override=ai)
+                r = self.run(tf, bars=requested_bars, retrain_every=retrain_every,
+                             min_score_override=score, min_ai_override=ai,
+                             _prepared=prepared)
                 if r.get('error'):
                     rows.append({'score':float(score), 'ai':float(ai), 'error':r.get('error')})
                     continue
@@ -271,7 +302,11 @@ class GoldBacktest:
                     'partial': bool(r.get('history_partial',False)),
                 })
         return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
-                'bars':int(bars if bars is not None else BACKTEST_BARS),
+                'bars':requested_bars, 'raw_bars':len(prepared['raw']),
+                'usable_bars':len(prepared['features']),
+                'history_partial':prepared['history_partial'],
+                'snapshot_start':prepared['features'].index[0].isoformat() if len(prepared['features']) else None,
+                'snapshot_end':prepared['features'].index[-1].isoformat() if len(prepared['features']) else None,
                 'trials':len(rows)}
 
     @staticmethod
