@@ -11,7 +11,8 @@ class GridSnapshotTests(unittest.TestCase):
         bt = GoldBacktest()
         prepared = {
             "raw": pd.DataFrame({"High": [2.0], "Low": [1.0]}),
-            "features": pd.DataFrame(index=pd.to_datetime(["2026-01-01T00:00:00Z"])),
+            "features": pd.DataFrame(index=pd.date_range(
+                "2026-01-01T00:00:00Z", periods=1200, freq="min")),
             "requested_bars": 5000,
             "received_bars": 5000,
             "history_partial": False,
@@ -52,9 +53,9 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(baseline["expectancy_r"], matching["e"])
         self.assertEqual(result["trials"], 4)
         self.assertEqual(result["raw_bars"], 5000)
-        self.assertEqual(result["usable_bars"], 1)
+        self.assertEqual(result["usable_bars"], 1200)
         self.assertEqual(result["snapshot_start"], "2026-01-01T00:00:00+00:00")
-        self.assertEqual(result["snapshot_end"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(result["snapshot_end"], "2026-01-01T19:59:00+00:00")
 
     def test_requested_bars_uses_timeframe_specific_config(self):
         self.assertEqual(GoldBacktest._requested_bars("5m"), 10000)
