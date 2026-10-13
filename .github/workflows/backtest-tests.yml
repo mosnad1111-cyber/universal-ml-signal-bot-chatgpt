@@ -3,7 +3,7 @@ name: Backtest consistency tests
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
 
 jobs:
   unit-tests:
