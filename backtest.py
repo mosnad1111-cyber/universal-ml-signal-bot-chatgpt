@@ -320,9 +320,7 @@ class GoldBacktest:
                     'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every))
-        min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
-                             ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else
-                              (MIN_SCORE, MIN_AI_PROB)))
+        min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
             min_score = float(min_score_override)
         if min_ai_override is not None:
