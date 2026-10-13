@@ -262,7 +262,7 @@ class GoldBacktest:
         history_partial = prepared['history_partial']
         if len(x) < 1200:
             return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}',
-                    'requested_bars':requested_bars, 'raw_bars':len(raw),
+                    'requested_bars':requested_bars, 'raw_bars':prepared['received_bars'],
                     'usable_bars':len(x), 'history_partial':history_partial}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every))
@@ -409,7 +409,8 @@ class GoldBacktest:
             rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
             for r in rows:
                 pf = '∞' if np.isinf(r['pf']) else f"{r['pf']:.2f}"
-                lines.append(f"Score {r['score']:.0f} | AI {r['ai']*100:.0f}% | {r['trades']} ص | WR {r['win_rate']:.1f}% | Net {r['net_r']:+.1f}R | PF {pf} | DD {r['dd']:.1f}R | E {r['e']:+.2f}R")
+                active = ' ← المعتمد حاليًا' if r['score'] == active_score and abs(r['ai'] - active_ai) < 1e-9 else ''
+                lines.append(f"Score {r['score']:.0f} | AI {r['ai']*100:.0f}% | {r['trades']} ص | WR {r['win_rate']:.1f}% | Net {r['net_r']:+.1f}R | PF {pf} | DD {r['dd']:.1f}R | E {r['e']:+.2f}R{active}")
             errors = [r for r in g.get('rows',[]) if 'error' in r]
             if errors:
                 lines += [f'❌ أخطاء: {len(errors)}']
@@ -448,7 +449,8 @@ class GoldBacktest:
                 lines += [f'⏱️ <b>{tf}</b>: ❌ {r["error"]}','']; continue
             n,w,l = r.get('trades',0),r.get('wins',0),r.get('losses',0); total += n; wins += w; net += r.get('net_r',0); pf = r.get('profit_factor',0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
             history_note = f'⚠️ التاريخ المتاح أقل من المطلوب: {r.get("raw_bars",0):,} / {r.get("requested_bars",0):,} — تم تشغيل الاختبار على المتاح.' if r.get('history_partial') else ''
-            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}']
+            active_score, active_ai = thresholds_for(tf)
+            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}',f'🎯 عتبات القبول: Score {active_score:.0f} | AI {active_ai*100:.0f}%']
             if r.get('snapshot_start') and r.get('snapshot_end'):
                 lines.append(f'🗓️ نطاق اللقطة: {r["snapshot_start"]} → {r["snapshot_end"]}')
             lines += [f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
