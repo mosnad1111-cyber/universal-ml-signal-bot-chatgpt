@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from backtest import GoldBacktest
+from config import thresholds_for
 
 
 class GridSnapshotTests(unittest.TestCase):
@@ -62,6 +63,11 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(GoldBacktest._requested_bars("15m"), 5000)
         self.assertEqual(GoldBacktest._requested_bars("1h"), 10000)
         self.assertEqual(GoldBacktest._requested_bars("15m", 1234), 1234)
+
+    def test_live_and_backtest_share_selected_thresholds(self):
+        self.assertEqual(thresholds_for("5m"), (75.0, 0.55))
+        self.assertEqual(thresholds_for("15m"), (70.0, 0.55))
+        self.assertEqual(thresholds_for("1h"), (65.0, 0.45))
 
     def test_prepare_reuses_snapshot_across_backtest_instances(self):
         from backtest import _SNAPSHOT_CACHE, _CACHE_LOCK
