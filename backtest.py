@@ -407,6 +407,8 @@ class GoldBacktest:
             lines.append('')
             rows = [r for r in g.get('rows',[]) if 'error' not in r]
             rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
+            active_score, active_ai = thresholds_for(tf)
+            lines.append(f'🎯 العتبات المعتمدة حاليًا: Score {active_score:.0f} | AI {active_ai*100:.0f}%')
             for r in rows:
                 pf = '∞' if np.isinf(r['pf']) else f"{r['pf']:.2f}"
                 active = ' ← المعتمد حاليًا' if r['score'] == active_score and abs(r['ai'] - active_ai) < 1e-9 else ''
