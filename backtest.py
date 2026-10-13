@@ -448,7 +448,10 @@ class GoldBacktest:
                 lines += [f'⏱️ <b>{tf}</b>: ❌ {r["error"]}','']; continue
             n,w,l = r.get('trades',0),r.get('wins',0),r.get('losses',0); total += n; wins += w; net += r.get('net_r',0); pf = r.get('profit_factor',0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
             history_note = f'⚠️ التاريخ المتاح أقل من المطلوب: {r.get("raw_bars",0):,} / {r.get("requested_bars",0):,} — تم تشغيل الاختبار على المتاح.' if r.get('history_partial') else ''
-            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}',f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}']
+            if r.get('snapshot_start') and r.get('snapshot_end'):
+                lines.append(f'🗓️ نطاق اللقطة: {r["snapshot_start"]} → {r["snapshot_end"]}')
+            lines += [f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
