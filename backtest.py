@@ -1,11 +1,20 @@
 import time
 import traceback
+import threading
 import numpy as np
 import pandas as pd
 from config import *
 from market import fetch, add_features
 from ai_engine import GoldAI
 from decision import build_setup
+
+
+# Share an immutable market snapshot and its out-of-sample predictions between
+# separate Telegram Backtest/Grid Search requests in the same worker process.
+_SNAPSHOT_CACHE = {}
+_PREDICTION_CACHE = {}
+_CACHE_LOCK = threading.RLock()
+_CACHE_TTL_SECONDS = 30 * 60
 
 
 class GoldBacktest:
@@ -204,33 +213,68 @@ class GoldBacktest:
         }.get(tf, BACKTEST_BARS))
 
     def _prepare(self, tf, requested_bars):
-        """Fetch and prepare one immutable data snapshot for a timeframe.
+        """Fetch and prepare one cached, immutable market snapshot per timeframe.
 
-        Grid Search must compare thresholds against this exact snapshot, including
-        the higher-timeframe context, rather than refetching data per combination.
+        Backtest and Grid Search actions often run in separate Telegram requests.
+        Reusing the same snapshot for 30 minutes makes their results directly
+        comparable instead of silently comparing different latest candles.
         """
+        cache_key = (tf, int(requested_bars))
+        now = time.time()
+        with _CACHE_LOCK:
+            cached = _SNAPSHOT_CACHE.get(cache_key)
+            if cached and now - cached[0] < _CACHE_TTL_SECONDS:
+                prepared = cached[1]
+                return {
+                    **prepared,
+                    'raw': prepared['raw'].copy(),
+                    'features': prepared['features'].copy(),
+                    'snapshot_reused': True,
+                }
+            _SNAPSHOT_CACHE.pop(cache_key, None)
+
         raw = fetch(GOLD_DATA_SYMBOL, tf, period=requested_bars)
         received_bars = len(raw)
         history_partial = received_bars < requested_bars
         if len(raw) > requested_bars:
             raw = raw.iloc[-requested_bars:].copy()
+            received_bars = len(raw)
         raw = self._completed(raw)
         x = self._enrich(tf, add_features(raw).dropna())
-        return {
+        start = x.index[0].isoformat() if len(x) else None
+        end = x.index[-1].isoformat() if len(x) else None
+        snapshot_id = f'{tf}:{requested_bars}:{len(raw)}:{start}:{end}'
+        prepared = {
             'raw': raw.copy(),
             'features': x.copy(),
             'requested_bars': requested_bars,
             'received_bars': received_bars,
             'history_partial': history_partial,
+            'snapshot_id': snapshot_id,
+            'snapshot_start': start,
+            'snapshot_end': end,
+            'snapshot_reused': False,
         }
+        with _CACHE_LOCK:
+            _SNAPSHOT_CACHE[cache_key] = (time.time(), prepared)
+        return {**prepared, 'raw': raw.copy(), 'features': x.copy()}
 
     def _walk_forward_predictions(self, tf, x, retrain_every):
-        """Generate one deterministic out-of-sample probability stream.
+        """Generate/cache deterministic out-of-sample probabilities for a snapshot.
 
-        Predictions are calculated once per candle and then reused by all
-        threshold combinations. Training at each scheduled point uses only
-        candles strictly before the candle being predicted.
+        Predictions are generated chronologically using only candles strictly
+        before each predicted candle. Identical snapshots reuse the same stream.
         """
+        start = x.index[0].isoformat() if len(x) else None
+        end = x.index[-1].isoformat() if len(x) else None
+        cache_key = (tf, int(retrain_every), len(x), start, end)
+        now = time.time()
+        with _CACHE_LOCK:
+            cached = _PREDICTION_CACHE.get(cache_key)
+            if cached and now - cached[0] < _CACHE_TTL_SECONDS:
+                return {i: dict(p) for i, p in cached[1].items()}
+            _PREDICTION_CACHE.pop(cache_key, None)
+
         warmup = 700
         step = max(200, int(retrain_every))
         predictions = {}
@@ -249,6 +293,10 @@ class GoldBacktest:
                 'BUY': model.probability(tf, row, 'BUY'),
                 'SELL': model.probability(tf, row, 'SELL'),
             }
+        with _CACHE_LOCK:
+            _PREDICTION_CACHE[cache_key] = (
+                time.time(), {i: dict(p) for i, p in predictions.items()}
+            )
         return predictions
 
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
@@ -262,8 +310,14 @@ class GoldBacktest:
         history_partial = prepared['history_partial']
         if len(x) < 1200:
             return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}',
-                    'requested_bars':requested_bars, 'raw_bars':len(raw),
-                    'usable_bars':len(x), 'history_partial':history_partial}
+                    'requested_bars':requested_bars,
+                    'raw_bars':prepared.get('received_bars', len(raw)),
+                    'completed_bars':len(raw), 'usable_bars':len(x),
+                    'history_partial':history_partial,
+                    'snapshot_id':prepared.get('snapshot_id'),
+                    'snapshot_start':x.index[0].isoformat() if len(x) else None,
+                    'snapshot_end':x.index[-1].isoformat() if len(x) else None,
+                    'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every))
         min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
@@ -313,8 +367,14 @@ class GoldBacktest:
         gl = abs(sum(min(t['r'], 0) for t in trades))
         res = {
             'timeframe': tf, 'requested_bars': requested_bars,
-            'raw_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
-            'history_partial': history_partial, 'trades': n, 'wins': w,
+            'raw_bars': prepared.get('received_bars', len(raw)),
+            'completed_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
+            'history_partial': history_partial,
+            'snapshot_id': prepared.get('snapshot_id'),
+            'snapshot_start': x.index[0].isoformat() if len(x) else None,
+            'snapshot_end': x.index[-1].isoformat() if len(x) else None,
+            'snapshot_reused': prepared.get('snapshot_reused', False),
+            'trades': n, 'wins': w,
             'losses': n-w, 'win_rate': 100*w/n if n else 0, 'net_r': net,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
             'profit_factor': gp/gl if gl else (float('inf') if gp else 0),
@@ -378,15 +438,27 @@ class GoldBacktest:
                     'dd': float(r.get('max_drawdown_r',0)),
                     'e': float(r.get('expectancy_r',0)),
                     'raw_bars': int(r.get('raw_bars',0)),
+                    'completed_bars': int(r.get('completed_bars',0)),
                     'usable_bars': int(r.get('usable_bars',0)),
                     'partial': bool(r.get('history_partial',False)),
                 })
+        default_score, default_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
+                                     ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else
+                                      (MIN_SCORE, MIN_AI_PROB)))
+        baseline = next((row for row in rows
+                         if 'error' not in row and row['score'] == float(default_score)
+                         and row['ai'] == float(default_ai)), None)
         return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
-                'bars':requested_bars, 'raw_bars':len(prepared['raw']),
+                'bars':requested_bars, 'raw_bars':prepared.get('received_bars', len(prepared['raw'])),
+                'completed_bars':len(prepared['raw']),
                 'usable_bars':len(prepared['features']),
                 'history_partial':prepared['history_partial'],
+                'snapshot_id':prepared.get('snapshot_id'),
+                'snapshot_reused':prepared.get('snapshot_reused', False),
                 'snapshot_start':prepared['features'].index[0].isoformat() if len(prepared['features']) else None,
                 'snapshot_end':prepared['features'].index[-1].isoformat() if len(prepared['features']) else None,
+                'default_score':float(default_score), 'default_ai':float(default_ai),
+                'baseline':baseline,
                 'trials':len(rows)}
 
     @staticmethod
@@ -402,8 +474,16 @@ class GoldBacktest:
             )
             if g.get('history_partial'):
                 lines.append('⚠️ البيانات المتاحة أقل من العدد المطلوب.')
+            if g.get('snapshot_reused'):
+                lines.append('♻️ أُعيد استخدام لقطة البيانات المحفوظة لمقارنة عادلة مع الاختبار السابق.')
             if g.get('snapshot_start') and g.get('snapshot_end'):
                 lines.append(f'🗓️ النطاق: {g["snapshot_start"]} → {g["snapshot_end"]}')
+            if g.get('snapshot_id'):
+                lines.append(f'🧾 معرّف اللقطة: {g["snapshot_id"]}')
+            if g.get('baseline'):
+                b = g['baseline']
+                pf_base = '∞' if np.isinf(b['pf']) else f"{b['pf']:.2f}"
+                lines.append(f"⚙️ الإعداد الحالي ({g['default_score']:.0f}/{g['default_ai']*100:.0f}%): {b['trades']} ص | Net {b['net_r']:+.1f}R | PF {pf_base} | E {b['e']:+.2f}R")
             lines.append('')
             rows = [r for r in g.get('rows',[]) if 'error' not in r]
             rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
@@ -448,7 +528,14 @@ class GoldBacktest:
                 lines += [f'⏱️ <b>{tf}</b>: ❌ {r["error"]}','']; continue
             n,w,l = r.get('trades',0),r.get('wins',0),r.get('losses',0); total += n; wins += w; net += r.get('net_r',0); pf = r.get('profit_factor',0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
             history_note = f'⚠️ التاريخ المتاح أقل من المطلوب: {r.get("raw_bars",0):,} / {r.get("requested_bars",0):,} — تم تشغيل الاختبار على المتاح.' if r.get('history_partial') else ''
-            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}',f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += ([history_note] if history_note else []) + [f'⏱️ <b>{tf}</b>',f'📚 الشموع الخام المستلمة: {r.get("raw_bars",0)} / المطلوب: {r.get("requested_bars",0)}',f'📚 الشموع المكتملة بعد استبعاد الحالية: {r.get("completed_bars",r.get("raw_bars",0))}',f'📚 الشموع القابلة للاستخدام: {r.get("usable_bars",0)}']
+            if r.get('snapshot_reused'):
+                lines.append('♻️ أُعيد استخدام لقطة البيانات المحفوظة.')
+            if r.get('snapshot_start') and r.get('snapshot_end'):
+                lines.append(f'🗓️ النطاق: {r["snapshot_start"]} → {r["snapshot_end"]}')
+            if r.get('snapshot_id'):
+                lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
+            lines += [f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
