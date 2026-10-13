@@ -14,8 +14,8 @@ class GridSnapshotTests(unittest.TestCase):
             "features": pd.DataFrame(index=pd.date_range(
                 "2026-01-01T00:00:00Z", periods=1200, freq="min")),
             "requested_bars": 5000,
-            "received_bars": 5000,
-            "history_partial": False,
+            "received_bars": 1,
+            "history_partial": True,
         }
         seen = []
         predictions = {700: {"BUY": 0.7, "SELL": 0.3}}
@@ -62,6 +62,38 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(GoldBacktest._requested_bars("15m"), 5000)
         self.assertEqual(GoldBacktest._requested_bars("1h"), 10000)
         self.assertEqual(GoldBacktest._requested_bars("15m", 1234), 1234)
+
+    def test_prepare_reuses_snapshot_across_backtest_instances(self):
+        from backtest import _SNAPSHOT_CACHE, _CACHE_LOCK
+
+        index = pd.date_range("2026-02-01T00:00:00Z", periods=4, freq="h")
+        frame = pd.DataFrame({
+            "Open": [10.0, 11.0, 12.0, 13.0],
+            "High": [11.0, 12.0, 13.0, 14.0],
+            "Low": [9.0, 10.0, 11.0, 12.0],
+            "Close": [10.5, 11.5, 12.5, 13.5],
+            "Volume": [100.0, 110.0, 120.0, 130.0],
+        }, index=index)
+        with _CACHE_LOCK:
+            _SNAPSHOT_CACHE.pop(("1h", 321), None)
+
+        with patch("backtest.fetch", return_value=frame) as fetch, \\
+             patch("backtest.add_features", side_effect=lambda df: df):
+            first_bt = GoldBacktest()
+            first_bt._enrich = lambda tf, df: df
+            first = first_bt._prepare("1h", 321)
+
+            second_bt = GoldBacktest()
+            second_bt._enrich = lambda tf, df: df
+            second = second_bt._prepare("1h", 321)
+
+        fetch.assert_called_once()
+        self.assertFalse(first["snapshot_reused"])
+        self.assertTrue(second["snapshot_reused"])
+        self.assertEqual(first["snapshot_id"], second["snapshot_id"])
+        self.assertEqual(first["received_bars"], 4)
+        self.assertEqual(len(first["raw"]), 3)
+        self.assertEqual(first["snapshot_start"], second["snapshot_start"]) if "snapshot_start" in first else None
 
 
 if __name__ == "__main__":
