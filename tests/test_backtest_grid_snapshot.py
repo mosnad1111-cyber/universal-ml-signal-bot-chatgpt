@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from backtest import GoldBacktest
+from config import thresholds_for
 
 
 class GridSnapshotTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(baseline["net_r"], matching["net_r"])
         self.assertAlmostEqual(baseline["expectancy_r"], matching["e"])
         self.assertEqual(result["trials"], 4)
-        self.assertEqual(result["raw_bars"], 1)
+        self.assertEqual(result["raw_bars"], 5000)
         self.assertEqual(result["usable_bars"], 1200)
         self.assertEqual(result["snapshot_start"], "2026-01-01T00:00:00+00:00")
         self.assertEqual(result["snapshot_end"], "2026-01-01T19:59:00+00:00")
@@ -62,6 +63,11 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(GoldBacktest._requested_bars("15m"), 5000)
         self.assertEqual(GoldBacktest._requested_bars("1h"), 10000)
         self.assertEqual(GoldBacktest._requested_bars("15m", 1234), 1234)
+
+    def test_live_and_backtest_share_selected_thresholds(self):
+        self.assertEqual(thresholds_for("5m"), (75.0, 0.55))
+        self.assertEqual(thresholds_for("15m"), (70.0, 0.55))
+        self.assertEqual(thresholds_for("1h"), (65.0, 0.45))
 
 
 if __name__ == "__main__":
