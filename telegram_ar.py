@@ -100,7 +100,7 @@ class Telegram:
             self.send('⏳ <b>يوجد اختبار يعمل حاليًا</b>\nانتظر انتهاء الاختبار الحالي قبل تشغيل Grid Search.',cid); return
         self.backtest_running=True
         total=len(GRID_SCORES)*len(GRID_AI_PROBS)*3
-        self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 15m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ قد يستغرق وقتًا لأن كل تركيبة تعيد Walk-Forward كامل.',cid)
+        self.send(f'🔬 <b>بدأ Grid Search</b>\n\n5m + 15m + 1H\nScore: {" / ".join(str(int(x)) for x in GRID_SCORES)}\nAI: {" / ".join(str(int(x*100))+"%" for x in GRID_AI_PROBS)}\nإجمالي الاختبارات: {total}\n\n⏳ سيتم حساب توقعات Walk-Forward مرة واحدة لكل فريم، ثم إعادة تقييم العتبات على التوقعات نفسها.',cid)
         def work():
             try:
                 bt=GoldBacktest(); grids={}

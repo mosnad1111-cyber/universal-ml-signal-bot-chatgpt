@@ -193,48 +193,146 @@ class GoldBacktest:
             equity += t['r']; peak = max(peak, equity); drawdown = max(drawdown, peak-equity)
         return drawdown
 
-    def run(self, tf, bars=None, retrain_every=None, min_score_override=None, min_ai_override=None):
-        started = time.time()
-        requested_bars = int(bars if bars is not None else {
+    @staticmethod
+    def _requested_bars(tf, bars=None):
+        return int(bars if bars is not None else {
             '1m': BACKTEST_BARS_1M,
             '5m': BACKTEST_BARS_5M,
             '15m': BACKTEST_BARS_15M,
             '30m': BACKTEST_BARS_30M,
             '1h': BACKTEST_BARS_1H,
         }.get(tf, BACKTEST_BARS))
-        retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+
+    def _prepare(self, tf, requested_bars):
+        """Fetch and prepare one immutable data snapshot for a timeframe.
+
+        Grid Search must compare thresholds against this exact snapshot, including
+        the higher-timeframe context, rather than refetching data per combination.
+        """
         raw = fetch(GOLD_DATA_SYMBOL, tf, period=requested_bars)
         received_bars = len(raw)
         history_partial = received_bars < requested_bars
-        # Run on all history TradingView actually returned instead of discarding a partial window.
         if len(raw) > requested_bars:
             raw = raw.iloc[-requested_bars:].copy()
         raw = self._completed(raw)
         x = self._enrich(tf, add_features(raw).dropna())
-        if len(x) < 1200: return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}', 'requested_bars':requested_bars, 'raw_bars':len(raw), 'usable_bars':len(x)}
-        warmup = 700; step = max(200, retrain_every); trades = []; model = GoldAI(); last_fit = -1; i = warmup
-        while i < len(x)-1:
-            if last_fit < 0 or i-last_fit >= step:
-                model = GoldAI(); ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR, sl_atr_mult=SL_ATR_MULT)
-                if not ok: i += 1; continue
+        return {
+            'raw': raw.copy(),
+            'features': x.copy(),
+            'requested_bars': requested_bars,
+            'received_bars': received_bars,
+            'history_partial': history_partial,
+        }
+
+    def _walk_forward_predictions(self, tf, x, retrain_every):
+        """Generate one deterministic out-of-sample probability stream.
+
+        Predictions are calculated once per candle and then reused by all
+        threshold combinations. Training at each scheduled point uses only
+        candles strictly before the candle being predicted.
+        """
+        warmup = 700
+        step = max(200, int(retrain_every))
+        predictions = {}
+        model = GoldAI()
+        last_fit = -1
+        for i in range(warmup, len(x) - 1):
+            if last_fit < 0 or i - last_fit >= step:
+                model = GoldAI()
+                ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
+                               sl_atr_mult=SL_ATR_MULT)
+                if not ok:
+                    continue
                 last_fit = i
             row = x.iloc[i]
-            probs = {'BUY':model.probability(tf,row,'BUY'), 'SELL':model.probability(tf,row,'SELL')}
+            predictions[i] = {
+                'BUY': model.probability(tf, row, 'BUY'),
+                'SELL': model.probability(tf, row, 'SELL'),
+            }
+        return predictions
+
+    def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
+            min_ai_override=None, _prepared=None, _predictions=None):
+        started = time.time()
+        requested_bars = self._requested_bars(tf, bars)
+        retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+        prepared = _prepared if _prepared is not None else self._prepare(tf, requested_bars)
+        raw = prepared['raw']
+        x = prepared['features']
+        history_partial = prepared['history_partial']
+        if len(x) < 1200:
+            return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}',
+                    'requested_bars':requested_bars, 'raw_bars':len(raw),
+                    'usable_bars':len(x), 'history_partial':history_partial}
+        predictions = (_predictions if _predictions is not None else
+                       self._walk_forward_predictions(tf, x, retrain_every))
+        min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
+                             ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else
+                              (MIN_SCORE, MIN_AI_PROB)))
+        if min_score_override is not None:
+            min_score = float(min_score_override)
+        if min_ai_override is not None:
+            min_ai = float(min_ai_override)
+
+        warmup = 700
+        trades = []
+        i = warmup
+        while i < len(x) - 1:
+            probs = predictions.get(i)
+            if probs is None:
+                i += 1
+                continue
+            row = x.iloc[i]
             prefix = pd.concat([x.iloc[:i+1].copy(), row.to_frame().T], axis=0)
-            min_score, min_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else (MIN_SCORE, MIN_AI_PROB)))
-            if min_score_override is not None: min_score = float(min_score_override)
-            if min_ai_override is not None: min_ai = float(min_ai_override)
-            setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT, min_score, min_ai, self._context(tf,row.name,x))
+            setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT,
+                                min_score, min_ai, self._context(tf, row.name, x))
             if setup:
-                start = raw.index.searchsorted(row.name, side='right'); result, end_j, act_j = self._resolve(raw, start, setup)
+                start = raw.index.searchsorted(row.name, side='right')
+                result, end_j, act_j = self._resolve(raw, start, setup)
                 if result:
                     r = 2.0 if result == 'TP' else -1.0
-                    trades.append({'time':row.name.isoformat(),'direction':setup['direction'],'score':float(setup['score']),'score_band':self._score_band(setup['score']),'ai':float(setup['ai_prob']),'ai_band':self._ai_band(setup['ai_prob']),'result':result,'r':r,'activation_time':raw.index[act_j].isoformat()})
-                    i = max(i+1, end_j+1); continue
+                    trades.append({
+                        'time': row.name.isoformat(),
+                        'direction': setup['direction'],
+                        'score': float(setup['score']),
+                        'score_band': self._score_band(setup['score']),
+                        'ai': float(setup['ai_prob']),
+                        'ai_band': self._ai_band(setup['ai_prob']),
+                        'result': result,
+                        'r': r,
+                        'activation_time': raw.index[act_j].isoformat(),
+                    })
+                    i = max(i + 1, end_j + 1)
+                    continue
             i += 1
-        n = len(trades); w = sum(t['result']=='TP' for t in trades); net = sum(t['r'] for t in trades); gp = sum(max(t['r'],0) for t in trades); gl = abs(sum(min(t['r'],0) for t in trades))
-        res = {'timeframe':tf,'requested_bars':requested_bars,'raw_bars':len(raw),'usable_bars':len(x),'bars':len(x),'history_partial':history_partial,'trades':n,'wins':w,'losses':n-w,'win_rate':100*w/n if n else 0,'net_r':net,'avg_score':sum(t['score'] for t in trades)/n if n else 0,'profit_factor':gp/gl if gl else (float('inf') if gp else 0),'max_drawdown_r':self._dd(trades),'expectancy_r':net/n if n else 0,'direction':self._groups(trades,'direction'),'score_bands':self._groups(trades,'score_band'),'ai_bands':self._groups(trades,'ai_band'),'periods':self._period_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'quarters':self._quarter_groups(trades, x.index[0] if len(x) else None, x.index[-1] if len(x) else None),'sequence':self._sequence_stats(trades),'elapsed_s':round(time.time()-started,1),'trades_detail':trades[-100:]}
-        self.last[tf] = res; return res
+
+        n = len(trades)
+        w = sum(t['result'] == 'TP' for t in trades)
+        net = sum(t['r'] for t in trades)
+        gp = sum(max(t['r'], 0) for t in trades)
+        gl = abs(sum(min(t['r'], 0) for t in trades))
+        res = {
+            'timeframe': tf, 'requested_bars': requested_bars,
+            'raw_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
+            'history_partial': history_partial, 'trades': n, 'wins': w,
+            'losses': n-w, 'win_rate': 100*w/n if n else 0, 'net_r': net,
+            'avg_score': sum(t['score'] for t in trades)/n if n else 0,
+            'profit_factor': gp/gl if gl else (float('inf') if gp else 0),
+            'max_drawdown_r': self._dd(trades),
+            'expectancy_r': net/n if n else 0,
+            'direction': self._groups(trades, 'direction'),
+            'score_bands': self._groups(trades, 'score_band'),
+            'ai_bands': self._groups(trades, 'ai_band'),
+            'periods': self._period_groups(trades, x.index[0] if len(x) else None,
+                                           x.index[-1] if len(x) else None),
+            'quarters': self._quarter_groups(trades, x.index[0] if len(x) else None,
+                                             x.index[-1] if len(x) else None),
+            'sequence': self._sequence_stats(trades),
+            'elapsed_s': round(time.time()-started, 1),
+            'trades_detail': trades[-100:],
+        }
+        self.last[tf] = res
+        return res
 
     def run_grid(self, tf, bars=None, retrain_every=None, scores=None, ai_probs=None, progress=None):
         """Run a threshold-only grid on identical walk-forward data.
@@ -248,13 +346,26 @@ class GoldBacktest:
         rows = []
         total = len(scores) * len(ai_probs)
         done = 0
+        # Fetch, feature-engineer, and align higher-timeframe context once.
+        # Every threshold combination reuses this exact snapshot. Model training
+        # is deterministic (fixed random_state) so thresholds are the only
+        # variable affecting trade acceptance.
+        requested_bars = self._requested_bars(tf, bars)
+        prepared = self._prepare(tf, requested_bars)
+        predictions = None
+        if len(prepared['features']) >= 1200:
+            predictions = self._walk_forward_predictions(
+                tf, prepared['features'],
+                int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+            )
         for score in scores:
             for ai in ai_probs:
                 done += 1
                 if progress:
                     progress(tf, done, total, float(score), float(ai))
-                r = self.run(tf, bars=bars, retrain_every=retrain_every,
-                             min_score_override=score, min_ai_override=ai)
+                r = self.run(tf, bars=requested_bars, retrain_every=retrain_every,
+                             min_score_override=score, min_ai_override=ai,
+                             _prepared=prepared, _predictions=predictions)
                 if r.get('error'):
                     rows.append({'score':float(score), 'ai':float(ai), 'error':r.get('error')})
                     continue
@@ -271,7 +382,11 @@ class GoldBacktest:
                     'partial': bool(r.get('history_partial',False)),
                 })
         return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
-                'bars':int(bars if bars is not None else BACKTEST_BARS),
+                'bars':requested_bars, 'raw_bars':len(prepared['raw']),
+                'usable_bars':len(prepared['features']),
+                'history_partial':prepared['history_partial'],
+                'snapshot_start':prepared['features'].index[0].isoformat() if len(prepared['features']) else None,
+                'snapshot_end':prepared['features'].index[-1].isoformat() if len(prepared['features']) else None,
                 'trials':len(rows)}
 
     @staticmethod
@@ -280,7 +395,16 @@ class GoldBacktest:
                  '', 'نفس بيانات Walk-Forward ونفس XGBoost ونفس إدارة الصفقة؛ التغيير الوحيد هو عتبات القبول.',
                  '⚠️ ترتيب النتائج داخل العينة لا يعني ضمانًا مستقبليًا.', '']
         for tf, g in grid_results.items():
-            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة', '']
+            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة']
+            lines.append(
+                f'📚 البيانات الثابتة لهذه التركيبات: {g.get("raw_bars", 0)} شمعة خام | '
+                f'{g.get("usable_bars", 0)} قابلة للاستخدام'
+            )
+            if g.get('history_partial'):
+                lines.append('⚠️ البيانات المتاحة أقل من العدد المطلوب.')
+            if g.get('snapshot_start') and g.get('snapshot_end'):
+                lines.append(f'🗓️ النطاق: {g["snapshot_start"]} → {g["snapshot_end"]}')
+            lines.append('')
             rows = [r for r in g.get('rows',[]) if 'error' not in r]
             rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
             for r in rows:
