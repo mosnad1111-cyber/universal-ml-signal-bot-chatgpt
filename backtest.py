@@ -315,7 +315,16 @@ class GoldBacktest:
                  '', 'نفس بيانات Walk-Forward ونفس XGBoost ونفس إدارة الصفقة؛ التغيير الوحيد هو عتبات القبول.',
                  '⚠️ ترتيب النتائج داخل العينة لا يعني ضمانًا مستقبليًا.', '']
         for tf, g in grid_results.items():
-            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة', '']
+            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة']
+            lines.append(
+                f'📚 البيانات الثابتة لهذه التركيبات: {g.get("raw_bars", 0)} شمعة خام | '
+                f'{g.get("usable_bars", 0)} قابلة للاستخدام'
+            )
+            if g.get('history_partial'):
+                lines.append('⚠️ البيانات المتاحة أقل من العدد المطلوب.')
+            if g.get('snapshot_start') and g.get('snapshot_end'):
+                lines.append(f'🗓️ النطاق: {g["snapshot_start"]} → {g["snapshot_end"]}')
+            lines.append('')
             rows = [r for r in g.get('rows',[]) if 'error' not in r]
             rows.sort(key=lambda z: (-z['net_r'], -z['pf'], z['dd'], -z['trades']))
             for r in rows:
