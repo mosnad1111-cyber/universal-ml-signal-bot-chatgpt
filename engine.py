@@ -59,11 +59,7 @@ class Engine:
         return x
 
     def _thresholds(self, tf):
-        if tf == '5m':
-            return MIN_SCORE_5M, MIN_AI_PROB_5M
-        if tf == '1h':
-            return MIN_SCORE_1H, MIN_AI_PROB_1H
-        return MIN_SCORE, MIN_AI_PROB
+        return thresholds_for(tf)
 
     def signal_text(self, s):
         side = '🟢 شراء' if s['direction'] == 'BUY' else '🔴 بيع'; p = s['ai_prob'] * 100
