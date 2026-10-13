@@ -251,6 +251,8 @@ class GoldBacktest:
             'received_bars': received_bars,
             'history_partial': history_partial,
             'snapshot_id': snapshot_id,
+            'snapshot_start': start,
+            'snapshot_end': end,
             'snapshot_reused': False,
         }
         with _CACHE_LOCK:
