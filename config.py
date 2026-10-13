@@ -26,7 +26,7 @@ BACKTEST_BARS_30M=int(os.getenv('BACKTEST_BARS_30M',str(BACKTEST_BARS)))
 BACKTEST_BARS_1H=int(os.getenv('BACKTEST_BARS_1H','10000'))
 BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','500'))
 def thresholds_for(tf):
-    \"\"\"Return the single source of truth for live and backtest acceptance thresholds.\"\"\"
+    """Return the single source of truth for live and backtest acceptance thresholds."""
     if tf == '5m':
         return MIN_SCORE_5M, MIN_AI_PROB_5M
     if tf == '15m':
