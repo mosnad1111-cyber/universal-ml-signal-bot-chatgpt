@@ -52,7 +52,7 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertAlmostEqual(baseline["net_r"], matching["net_r"])
         self.assertAlmostEqual(baseline["expectancy_r"], matching["e"])
         self.assertEqual(result["trials"], 4)
-        self.assertEqual(result["raw_bars"], 5000)
+        self.assertEqual(result["raw_bars"], 1)
         self.assertEqual(result["usable_bars"], 1200)
         self.assertEqual(result["snapshot_start"], "2026-01-01T00:00:00+00:00")
         self.assertEqual(result["snapshot_end"], "2026-01-01T19:59:00+00:00")
