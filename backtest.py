@@ -55,6 +55,10 @@ class GoldBacktest:
                     'macd_hist': prefix+'_macd_hist',
                     'dist_ema20': prefix+'_dist_ema20',
                 }).drop(columns=['ema20','ema50','ema200'])
+                # OHLC timestamps mark candle OPEN. Higher-timeframe features are
+                # only knowable at candle CLOSE; shift availability forward to
+                # prevent historical lower-timeframe rows seeing future HTF data.
+                h.index = h.index + pd.Timedelta({'5m': '5min', '15m': '15min', '1h': '1h'}[htf])
                 x = pd.merge_asof(
                     x.sort_index(), h.sort_index(),
                     left_index=True, right_index=True, direction='backward'
