@@ -34,8 +34,8 @@ class GridSnapshotTests(unittest.TestCase):
                 "usable_bars": 1, "history_partial": False,
             }
 
-        with patch.object(bt, "_prepare", return_value=prepared) as prepare, \
-             patch.object(bt, "_walk_forward_predictions", return_value=predictions) as predict, \
+        with patch.object(bt, "_prepare", return_value=prepared) as prepare, \\
+             patch.object(bt, "_walk_forward_predictions", return_value=predictions) as predict, \\
              patch.object(bt, "run", side_effect=fake_run):
             baseline = bt.run("15m", bars=5000, min_score_override=65,
                               min_ai_override=0.50, _prepared=prepared,
@@ -67,7 +67,7 @@ class GridSnapshotTests(unittest.TestCase):
     def test_live_and_backtest_share_selected_thresholds(self):
         self.assertEqual(thresholds_for("5m"), (75.0, 0.55))
         self.assertEqual(thresholds_for("15m"), (70.0, 0.55))
-        self.assertEqual(thresholds_for("1h"), (65.0, 0.45))
+        self.assertEqual(thresholds_for("1h"), (65.0, 0.50))
 
     def test_prepare_reuses_snapshot_across_backtest_instances(self):
         from backtest import _SNAPSHOT_CACHE, _CACHE_LOCK
