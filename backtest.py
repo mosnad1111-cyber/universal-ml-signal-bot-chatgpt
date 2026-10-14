@@ -84,17 +84,37 @@ class GoldBacktest:
         return {'trend': 0}
 
     def _resolve(self, df, start, setup):
-        d = setup['direction']; entry = float(setup['entry']); sl = float(setup['sl']); tp = float(setup['tp']); active = False
+        """Resolve a signal with finite pending and total-lifetime limits."""
+        d = setup['direction']
+        entry = float(setup['entry'])
+        sl = float(setup['sl'])
+        tp = float(setup['tp'])
+        pending_ttl = max(1, int(SIGNAL_PENDING_TTL_BARS))
+        max_lifetime = max(pending_ttl + 1, int(SIGNAL_MAX_LIFETIME_BARS))
+        signal_bar = max(0, int(start) - 1)
+        active = False
+        act_j = None
         for j in range(start, len(df)):
+            age = j - signal_bar
             hi, lo = float(df['High'].iloc[j]), float(df['Low'].iloc[j])
             if not active:
-                if not (lo <= entry <= hi): continue
-                active = True
+                if lo <= entry <= hi:
+                    active = True
+                    act_j = j
+                else:
+                    if age >= pending_ttl:
+                        return 'EXPIRED_UNFILLED', j, None
+                    continue
             hit_sl, hit_tp = ((lo <= sl, hi >= tp) if d == 'BUY' else (hi >= sl, lo <= tp))
-            if hit_sl and hit_tp: return 'SL', j, j
-            if hit_tp: return 'TP', j, j
-            if hit_sl: return 'SL', j, j
-        return None, None, None
+            if hit_sl and hit_tp:
+                return 'SL', j, act_j
+            if hit_tp:
+                return 'TP', j, act_j
+            if hit_sl:
+                return 'SL', j, act_j
+            if age >= max_lifetime:
+                return 'TIMEOUT', j, act_j
+        return None, None, act_j
 
     @staticmethod
     def _score_band(v):
@@ -332,6 +352,8 @@ class GoldBacktest:
 
         warmup = 700
         trades = []
+        expired_unfilled = 0
+        unresolved_at_end = 0
         i = warmup
         while i < len(x) - 1:
             probs = predictions.get(i)
@@ -345,8 +367,21 @@ class GoldBacktest:
             if setup:
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
+                if result == 'EXPIRED_UNFILLED':
+                    expired_unfilled += 1
+                    # Match live behavior: no new setup while waiting for entry.
+                    i = max(i + 1, end_j + 1)
+                    continue
                 if result:
-                    r = 2.0 if result == 'TP' else -1.0
+                    if result == 'TP':
+                        r = float(RR)
+                    elif result == 'SL':
+                        r = -1.0
+                    else:
+                        risk = abs(float(setup['entry']) - float(setup['sl']))
+                        close_price = float(raw['Close'].iloc[end_j])
+                        signed_move = (close_price - float(setup['entry'])) if setup['direction'] == 'BUY' else (float(setup['entry']) - close_price)
+                        r = signed_move / risk if risk > 0 else 0.0
                     trades.append({
                         'time': row.name.isoformat(),
                         'direction': setup['direction'],
@@ -355,21 +390,23 @@ class GoldBacktest:
                         'ai': float(setup['ai_prob']),
                         'ai_band': self._ai_band(setup['ai_prob']),
                         'result': result,
-                        'r': r,
-                        'activation_time': raw.index[act_j].isoformat(),
+                        'r': float(r),
+                        'activation_time': raw.index[act_j].isoformat() if act_j is not None else None,
+                        'exit_time': raw.index[end_j].isoformat(),
+                        'exit_price': float(raw['Close'].iloc[end_j]) if result == 'TIMEOUT' else (float(setup['tp']) if result == 'TP' else float(setup['sl'])),
                     })
-                    # The live engine allows only one open signal per timeframe.
-                    # Skip all candles until this trade closes at SL/TP.
+                    # Skip candles until TP/SL or the explicit timeout.
                     i = max(i + 1, end_j + 1)
                     continue
-                # A pending or activated signal that has not reached SL/TP still
-                # occupies the timeframe in live trading. Do not create later
-                # overlapping signals and silently overstate the backtest count.
+                # The history ended before the configured lifetime could resolve.
+                unresolved_at_end += 1
                 break
             i += 1
 
         n = len(trades)
         w = sum(t['result'] == 'TP' for t in trades)
+        losses = sum(t['result'] == 'SL' for t in trades)
+        timeouts = sum(t['result'] == 'TIMEOUT' for t in trades)
         net = sum(t['r'] for t in trades)
         gp = sum(max(t['r'], 0) for t in trades)
         gl = abs(sum(min(t['r'], 0) for t in trades))
@@ -382,8 +419,9 @@ class GoldBacktest:
             'snapshot_start': x.index[0].isoformat() if len(x) else None,
             'snapshot_end': x.index[-1].isoformat() if len(x) else None,
             'snapshot_reused': prepared.get('snapshot_reused', False),
-            'trades': n, 'wins': w,
-            'losses': n-w, 'win_rate': 100*w/n if n else 0, 'net_r': net,
+            'trades': n, 'wins': w, 'losses': losses, 'timeouts': timeouts,
+            'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
+            'win_rate': 100*w/n if n else 0, 'net_r': net,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
             'profit_factor': gp/gl if gl else (float('inf') if gp else 0),
             'max_drawdown_r': self._dd(trades),
@@ -543,7 +581,7 @@ class GoldBacktest:
                 lines.append(f'🗓️ النطاق: {r["snapshot_start"]} → {r["snapshot_end"]}')
             if r.get('snapshot_id'):
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
-            lines += [f'📌 الصفقات: {n}',f'✅ ربح: {w} | ❌ خسارة: {l}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {w} | ❌ وقف: {l} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
