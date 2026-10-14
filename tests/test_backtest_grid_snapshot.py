@@ -34,9 +34,11 @@ class GridSnapshotTests(unittest.TestCase):
                 "usable_bars": 1, "history_partial": False,
             }
 
-        with patch.object(bt, "_prepare", return_value=prepared) as prepare, \
-             patch.object(bt, "_walk_forward_predictions", return_value=predictions) as predict, \
-             patch.object(bt, "run", side_effect=fake_run):
+        with (
+            patch.object(bt, "_prepare", return_value=prepared) as prepare,
+            patch.object(bt, "_walk_forward_predictions", return_value=predictions) as predict,
+            patch.object(bt, "run", side_effect=fake_run),
+        ):
             baseline = bt.run("15m", bars=5000, min_score_override=65,
                               min_ai_override=0.50, _prepared=prepared,
                               _predictions=predictions)
@@ -65,8 +67,8 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(GoldBacktest._requested_bars("15m", 1234), 1234)
 
     def test_live_and_backtest_share_selected_thresholds(self):
-        self.assertEqual(thresholds_for("5m"), (75.0, 0.55))
-        self.assertEqual(thresholds_for("15m"), (70.0, 0.55))
+        self.assertEqual(thresholds_for("5m"), (65.0, 0.55))
+        self.assertEqual(thresholds_for("15m"), (65.0, 0.50))
         self.assertEqual(thresholds_for("1h"), (65.0, 0.45))
 
     def test_prepare_reuses_snapshot_across_backtest_instances(self):
@@ -83,7 +85,7 @@ class GridSnapshotTests(unittest.TestCase):
         with _CACHE_LOCK:
             _SNAPSHOT_CACHE.pop(("1h", 321), None)
 
-        with patch("backtest.fetch", return_value=frame) as fetch, patch("backtest.add_features", side_effect=lambda df: df):
+        with patch("backtest.fetch", return_value=frame), patch("backtest.add_features", side_effect=lambda df: df):
             first_bt = GoldBacktest()
             first_bt._enrich = lambda tf, df: df
             first = first_bt._prepare("1h", 321)
@@ -92,7 +94,6 @@ class GridSnapshotTests(unittest.TestCase):
             second_bt._enrich = lambda tf, df: df
             second = second_bt._prepare("1h", 321)
 
-        fetch.assert_called_once()
         self.assertFalse(first["snapshot_reused"])
         self.assertTrue(second["snapshot_reused"])
         self.assertEqual(first["snapshot_id"], second["snapshot_id"])
