@@ -358,8 +358,14 @@ class GoldBacktest:
                         'r': r,
                         'activation_time': raw.index[act_j].isoformat(),
                     })
+                    # The live engine allows only one open signal per timeframe.
+                    # Skip all candles until this trade closes at SL/TP.
                     i = max(i + 1, end_j + 1)
                     continue
+                # A pending or activated signal that has not reached SL/TP still
+                # occupies the timeframe in live trading. Do not create later
+                # overlapping signals and silently overstate the backtest count.
+                break
             i += 1
 
         n = len(trades)
