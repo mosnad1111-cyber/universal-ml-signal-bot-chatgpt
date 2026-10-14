@@ -38,3 +38,8 @@ def thresholds_for(tf):
 # Grid search: threshold-only robustness test on the same walk-forward history.
 GRID_SCORES=(60,65,70,75)
 GRID_AI_PROBS=(0.40,0.45,0.50,0.55,0.60)
+
+# Signal lifecycle limits shared by the live engine and historical backtest.
+# Waiting entries are valid for 12 bars; all open signals expire after 48 bars.
+SIGNAL_PENDING_TTL_BARS=int(os.getenv('SIGNAL_PENDING_TTL_BARS','12'))
+SIGNAL_MAX_LIFETIME_BARS=int(os.getenv('SIGNAL_MAX_LIFETIME_BARS','48'))
