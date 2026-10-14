@@ -160,6 +160,19 @@ class GoldAI:
             metrics[f'{name}_validation_rows']=int(mask.sum())
             metrics[f'{name}_positive_rate']=float(yv.iloc[mask].mean()) if mask.sum() else 0.0
 
+        # Keep the chronological holdout metrics above untouched, but refit the
+        # deployment model on every label that is already fully observable at this
+        # training timestamp. _label_direction leaves the most recent horizon
+        # candles unlabeled, so these outcomes have matured and do not leak future
+        # information. Previously the live/WF model discarded the newest 20% of
+        # available history after using it only for validation.
+        all_labeled = pd.concat([train, val]).sort_index(kind='stable')
+        Xall = all_labeled[FEATURES]
+        yall = all_labeled['_label']
+        model.fit(Xall, yall)
+        metrics['deployment_training_rows'] = int(len(Xall))
+        metrics['deployment_training_candles'] = int(len(set(all_labeled.index)))
+
         if hasattr(model, 'feature_importances_'):
             imp=np.asarray(model.feature_importances_,dtype=float)
             pairs=sorted(zip(FEATURES,imp),key=lambda z:z[1],reverse=True)[:10]
