@@ -12,7 +12,8 @@ ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_AT
 MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_AI_PROB','0.50'))
 MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','75')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.55'))
 MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','70')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.55'))
-MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','65')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.45'))
+# Avoid accepting the weaker 40-49% AI-probability cohort on 1h.
+MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','65')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.50'))
 MODEL_REFRESH_HOURS=float(os.getenv('MODEL_REFRESH_HOURS','6')); DB_PATH=os.getenv('DB_PATH','data/gold_bot.sqlite3')
 # Keep live model training on the same requested history depth as the extended backtest.
 # TradingView may return fewer bars than requested; the bot uses whatever is actually available.
