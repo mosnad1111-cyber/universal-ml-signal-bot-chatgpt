@@ -8,11 +8,12 @@ TIMEFRAMES=['5m','15m','1h']
 SCAN_SECONDS=int(os.getenv('SCAN_SECONDS','60')); MONITOR_SECONDS=int(os.getenv('MONITOR_SECONDS','15'))
 RR=float(os.getenv('RR','2.0')); PIVOT_LEN=int(os.getenv('PIVOT_LEN','5')); DIVISOR=float(os.getenv('DIVISOR','3.6'))
 ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_ATR_MULT','1.15'))
-# More permissive provisional thresholds to increase opportunities without lowering AI floors too aggressively.
+# Provisional per-timeframe thresholds selected from the latest threshold grid search.
+# These are candidates for out-of-sample validation, not proof of profitability.
 MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_AI_PROB','0.50'))
-MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','65')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.55'))
-MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','65')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.50'))
-MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','65')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.45'))
+MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','60')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.60'))
+MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','65')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.45'))
+MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','60')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.45'))
 MODEL_REFRESH_HOURS=float(os.getenv('MODEL_REFRESH_HOURS','6')); DB_PATH=os.getenv('DB_PATH','data/gold_bot.sqlite3')
 # Keep live model training on the same requested history depth as the extended backtest.
 # TradingView may return fewer bars than requested; the bot uses whatever is actually available.
