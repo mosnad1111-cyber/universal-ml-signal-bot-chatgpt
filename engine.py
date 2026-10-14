@@ -31,6 +31,9 @@ class Engine:
         for htf in sources.get(tf, []):
             try:
                 d = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
+                # Provider timestamps mark candle OPEN; context is available only
+                # after the higher-timeframe candle closes.
+                d.index = d.index + pd.Timedelta({'15m': '15min', '1h': '1h'}[htf])
                 if len(d):
                     before = d.loc[d.index <= target_index]
                     r = before.iloc[-1] if len(before) else d.iloc[0]
@@ -51,6 +54,8 @@ class Engine:
                     h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
                     h.loc[(h.ema20 < h.ema50) & (h.ema50 < h.ema200), 'trend'] = -1
                     h = h.rename(columns={'trend':prefix+'_trend','rsi':prefix+'_rsi','macd_hist':prefix+'_macd_hist','dist_ema20':prefix+'_dist_ema20'}).drop(columns=['ema20','ema50','ema200'])
+                    # Do not expose a higher-timeframe candle before its close.
+                    h.index = h.index + pd.Timedelta({'15m': '15min', '1h': '1h'}[htf])
                     x = pd.merge_asof(x.sort_index(), h.sort_index(), left_index=True, right_index=True, direction='backward')
                 except Exception:
                     x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
