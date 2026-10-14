@@ -53,7 +53,23 @@ class DB:
     def set_setting(self,key,value):
         with self.lock,self._conn() as c:c.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,str(value)))
     def closed_stats(self):
-        with self.lock,self._conn() as c: rows=c.execute("SELECT result FROM signals WHERE status='CLOSED' AND result IN ('TP','SL')").fetchall()
-        w=sum(r['result']=='TP' for r in rows); l=sum(r['result']=='SL' for r in rows); return len(rows),w,l
+        with self.lock,self._conn() as c:
+            rows=c.execute("SELECT result,entry,sl,tp,direction,close_price FROM signals WHERE status='CLOSED' AND result IN ('TP','SL','TIMEOUT')").fetchall()
+        w=sum(r['result']=='TP' for r in rows)
+        l=sum(r['result']=='SL' for r in rows)
+        timeouts=sum(r['result']=='TIMEOUT' for r in rows)
+        net_r=0.0
+        for r in rows:
+            risk=abs(float(r['entry'])-float(r['sl']))
+            if risk <= 0:
+                continue
+            if r['result']=='TP':
+                net_r += abs(float(r['tp'])-float(r['entry']))/risk
+            elif r['result']=='SL':
+                net_r -= 1.0
+            elif r['close_price'] is not None:
+                move=(float(r['close_price'])-float(r['entry'])) if r['direction']=='BUY' else (float(r['entry'])-float(r['close_price']))
+                net_r += move/risk
+        return len(rows),w,l,timeouts,net_r
     def recent(self,n=10):
         with self.lock,self._conn() as c:return c.execute("SELECT * FROM signals ORDER BY id DESC LIMIT ?",(n,)).fetchall()
