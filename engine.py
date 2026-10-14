@@ -218,7 +218,10 @@ class Engine:
         threading.Thread(target=self.scanner,daemon=True).start(); threading.Thread(target=self.monitor,daemon=True).start()
 
     def stats_text(self):
-        total,w,l=self.db.closed_stats(); wr=100*w/total if total else 0; r=w*RR-l; m=self.ai.info(); lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ رابحة: <b>%d</b>'%w,'❌ خاسرة: <b>%d</b>'%l,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة النظرية: <b>{r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
+        total,w,l,timeouts,net_r=self.db.closed_stats()
+        wr=100*w/total if total else 0
+        m=self.ai.info()
+        lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ وصلت إلى الهدف: <b>%d</b>'%w,'❌ ضربت وقف الخسارة: <b>%d</b>'%l,'⏳ أُغلقت بانتهاء المهلة: <b>%d</b>'%timeouts,f'📈 الفوز: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة المحققة: <b>{net_r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
         for tf in TIMEFRAMES:
             v=m.get(tf,{})
             if v:
