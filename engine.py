@@ -150,18 +150,53 @@ class Engine:
             lines.append('')
         return '\n'.join(lines)
 
+    @staticmethod
+    def _bars_since_signal(df, candle_time):
+        """Return bar age using provider candle-open timestamps, timezone-safe."""
+        if df is None or df.empty or not candle_time:
+            return 0
+        try:
+            signal_ts = pd.Timestamp(candle_time)
+            idx = df.index
+            if getattr(idx, 'tz', None) is not None and signal_ts.tzinfo is None:
+                signal_ts = signal_ts.tz_localize(idx.tz)
+            elif getattr(idx, 'tz', None) is None and signal_ts.tzinfo is not None:
+                signal_ts = signal_ts.tz_convert(None)
+            signal_pos = int(idx.searchsorted(signal_ts, side='right')) - 1
+            if signal_pos < 0:
+                return 0
+            return max(0, len(df) - 1 - signal_pos)
+        except Exception:
+            return 0
+
     def monitor(self):
         while not self.stop_event.is_set():
             for s in self.db.all_open():
                 try:
-                    df=fetch(GOLD_DATA_SYMBOL,s['timeframe']); high=float(df['High'].iloc[-1]); low=float(df['Low'].iloc[-1])
-                    if s['status']=='WAITING' and low<=s['entry']<=high:
-                        self.db.activate(s['id'],s['entry']); self.send(f'🟢 <b>تم تفعيل صفقة الذهب</b>\n\n⏱️ {s["timeframe"]}\n📍 الدخول: {self.fmt(s["entry"])}\n🛑 SL: {self.fmt(s["sl"])}\n🎯 TP: {self.fmt(s["tp"])}')
+                    df=fetch(GOLD_DATA_SYMBOL,s['timeframe'])
+                    if df is None or df.empty:
+                        continue
+                    high=float(df['High'].iloc[-1]); low=float(df['Low'].iloc[-1])
+                    close=float(df['Close'].iloc[-1])
+                    age=self._bars_since_signal(df,s['candle_time'])
+                    if s['status']=='WAITING':
+                        if low<=s['entry']<=high:
+                            self.db.activate(s['id'],s['entry'])
+                            self.send(f'🟢 <b>تم تفعيل صفقة الذهب</b>\n\n⏱️ {s["timeframe"]}\n📍 الدخول: {self.fmt(s["entry"])}\n🛑 SL: {self.fmt(s["sl"])}\n🎯 TP: {self.fmt(s["tp"])}')
+                        elif age >= max(1, SIGNAL_PENDING_TTL_BARS):
+                            self.db.cancel(s['id'],'EXPIRED_UNFILLED')
+                            self.send(f'⌛ <b>انتهت صلاحية الإشارة دون تفعيل</b>\n⏱️ {s["timeframe"]}\nلم يصل السعر إلى الدخول خلال {SIGNAL_PENDING_TTL_BARS} شمعة؛ أُلغيت الإشارة.')
                     elif s['status']=='ACTIVE':
                         sl=low<=s['sl'] if s['direction']=='BUY' else high>=s['sl']; tp=high>=s['tp'] if s['direction']=='BUY' else low<=s['tp']
-                        if sl and tp: self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>إغلاق محافظ: SL</b>\n⏱️ {s["timeframe"]}\nالذهب لمس SL وTP في نفس الشمعة؛ احتُسبت SL.')
-                        elif sl: self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>ضرب وقف الخسارة</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["sl"])}')
-                        elif tp: self.db.close(s['id'],'TP',s['tp']); self.send(f'✅ <b>تحقق الهدف TP</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["tp"])}\n🎉 نتيجة: +{RR:g}R')
+                        if sl and tp:
+                            self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>إغلاق محافظ: SL</b>\n⏱️ {s["timeframe"]}\nالذهب لمس SL وTP في نفس الشمعة؛ احتُسبت SL.')
+                        elif sl:
+                            self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>ضرب وقف الخسارة</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["sl"])}')
+                        elif tp:
+                            self.db.close(s['id'],'TP',s['tp']); self.send(f'✅ <b>تحقق الهدف TP</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["tp"])}\n🎉 نتيجة: +{RR:g}R')
+                        elif age >= max(SIGNAL_PENDING_TTL_BARS + 1, SIGNAL_MAX_LIFETIME_BARS):
+                            self.db.close(s['id'],'TIMEOUT',close)
+                            self.send(f'⏳ <b>إغلاق الصفقة لانتهاء المهلة</b>\n⏱️ {s["timeframe"]}\n💵 سعر الإغلاق: {self.fmt(close)}\nأُغلقت بسعر السوق بعد {age} شمعة دون وصول إلى TP أو SL.')
                 except Exception: traceback.print_exc()
             time.sleep(MONITOR_SECONDS)
 
