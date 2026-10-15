@@ -25,7 +25,7 @@ class GoldBacktest:
     def _completed(self, df):
         return df.iloc[:-1].copy() if len(df) > 1 else df
 
-    def _enrich(self, tf, x):
+    def _enrich(self, tf, x, symbol=GOLD_DATA_SYMBOL):
         x = x.copy()
         # Map each tested timeframe to the higher-timeframe context it needs.
         # 1m -> 5m/15m/1h, 5m -> 15m/1h, 15m -> 1h, 30m -> 1h.
@@ -44,7 +44,7 @@ class GoldBacktest:
                 x[prefix+'_dist_ema20'] = 0
                 continue
             try:
-                h = self._completed(add_features(fetch(GOLD_DATA_SYMBOL, htf)).dropna())
+                h = self._completed(add_features(fetch(symbol, htf)).dropna())
                 h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
                 h['trend'] = 0
                 h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
@@ -246,14 +246,14 @@ class GoldBacktest:
             '1h': BACKTEST_BARS_1H,
         }.get(tf, BACKTEST_BARS))
 
-    def _prepare(self, tf, requested_bars):
+    def _prepare(self, tf, requested_bars, symbol=GOLD_DATA_SYMBOL):
         """Fetch and prepare one cached, immutable market snapshot per timeframe.
 
         Backtest and Grid Search actions often run in separate Telegram requests.
         Reusing the same snapshot for 30 minutes makes their results directly
         comparable instead of silently comparing different latest candles.
         """
-        cache_key = (tf, int(requested_bars))
+        cache_key = (symbol, tf, int(requested_bars))
         now = time.time()
         with _CACHE_LOCK:
             cached = _SNAPSHOT_CACHE.get(cache_key)
@@ -267,17 +267,17 @@ class GoldBacktest:
                 }
             _SNAPSHOT_CACHE.pop(cache_key, None)
 
-        raw = fetch(GOLD_DATA_SYMBOL, tf, period=requested_bars)
+        raw = fetch(symbol, tf, period=requested_bars)
         received_bars = len(raw)
         history_partial = received_bars < requested_bars
         if len(raw) > requested_bars:
             raw = raw.iloc[-requested_bars:].copy()
             received_bars = len(raw)
         raw = self._completed(raw)
-        x = self._enrich(tf, add_features(raw).dropna())
+        x = self._enrich(tf, add_features(raw).dropna(), symbol)
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
-        snapshot_id = f'{tf}:{requested_bars}:{len(raw)}:{start}:{end}'
+        snapshot_id = f'{symbol}:{tf}:{requested_bars}:{len(raw)}:{start}:{end}'
         prepared = {
             'raw': raw.copy(),
             'features': x.copy(),
@@ -293,7 +293,7 @@ class GoldBacktest:
             _SNAPSHOT_CACHE[cache_key] = (time.time(), prepared)
         return {**prepared, 'raw': raw.copy(), 'features': x.copy()}
 
-    def _walk_forward_predictions(self, tf, x, retrain_every):
+    def _walk_forward_predictions(self, tf, x, retrain_every, symbol=GOLD_DATA_SYMBOL):
         """Generate/cache deterministic out-of-sample probabilities for a snapshot.
 
         Predictions are generated chronologically using only candles strictly
@@ -301,7 +301,7 @@ class GoldBacktest:
         """
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
-        cache_key = (tf, int(retrain_every), len(x), start, end)
+        cache_key = (symbol, tf, int(retrain_every), len(x), start, end)
         now = time.time()
         with _CACHE_LOCK:
             cached = _PREDICTION_CACHE.get(cache_key)
@@ -334,11 +334,11 @@ class GoldBacktest:
         return predictions
 
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
-            min_ai_override=None, _prepared=None, _predictions=None):
+            min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL):
         started = time.time()
         requested_bars = self._requested_bars(tf, bars)
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
-        prepared = _prepared if _prepared is not None else self._prepare(tf, requested_bars)
+        prepared = _prepared if _prepared is not None else self._prepare(tf, requested_bars, symbol)
         raw = prepared['raw']
         x = prepared['features']
         history_partial = prepared['history_partial']
@@ -353,7 +353,7 @@ class GoldBacktest:
                     'snapshot_end':x.index[-1].isoformat() if len(x) else None,
                     'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
-                       self._walk_forward_predictions(tf, x, retrain_every))
+                       self._walk_forward_predictions(tf, x, retrain_every, symbol))
         min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
             min_score = float(min_score_override)
@@ -456,10 +456,12 @@ class GoldBacktest:
             'elapsed_s': round(time.time()-started, 1),
             'trades_detail': trades[-100:],
         }
-        self.last[tf] = res
+        res['symbol'] = symbol
+        res['asset_label'] = next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol)
+        self.last[(symbol, tf)] = res
         return res
 
-    def run_grid(self, tf, bars=None, retrain_every=None, scores=None, ai_probs=None, progress=None):
+    def run_grid(self, tf, bars=None, retrain_every=None, scores=None, ai_probs=None, progress=None, symbol=GOLD_DATA_SYMBOL):
         """Run a threshold-only grid on identical walk-forward data.
 
         The XGBoost/model/risk logic is unchanged. Only the acceptance thresholds
@@ -481,7 +483,7 @@ class GoldBacktest:
         if len(prepared['features']) >= 1200:
             predictions = self._walk_forward_predictions(
                 tf, prepared['features'],
-                int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
+                int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY), symbol
             )
         for score in scores:
             for ai in ai_probs:
@@ -490,7 +492,7 @@ class GoldBacktest:
                     progress(tf, done, total, float(score), float(ai))
                 r = self.run(tf, bars=requested_bars, retrain_every=retrain_every,
                              min_score_override=score, min_ai_override=ai,
-                             _prepared=prepared, _predictions=predictions)
+                             _prepared=prepared, _predictions=predictions, symbol=symbol)
                 if r.get('error'):
                     rows.append({'score':float(score), 'ai':float(ai), 'error':r.get('error')})
                     continue
@@ -511,7 +513,7 @@ class GoldBacktest:
         baseline = next((row for row in rows
                          if 'error' not in row and row['score'] == float(default_score)
                          and row['ai'] == float(default_ai)), None)
-        return {'timeframe':tf, 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
+        return {'timeframe':tf, 'symbol':symbol, 'asset_label':next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol), 'rows':rows, 'scores':scores, 'ai_probs':ai_probs,
                 'bars':requested_bars, 'raw_bars':prepared.get('received_bars', len(prepared['raw'])),
                 'completed_bars':len(prepared['raw']),
                 'usable_bars':len(prepared['features']),
@@ -530,7 +532,7 @@ class GoldBacktest:
                  '', 'نفس بيانات Walk-Forward ونفس XGBoost ونفس إدارة الصفقة؛ التغيير الوحيد هو عتبات القبول.',
                  '⚠️ ترتيب النتائج داخل العينة لا يعني ضمانًا مستقبليًا.', '']
         for tf, g in grid_results.items():
-            lines += [f'⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة']
+            lines += [f'{g.get("asset_label", "")} | ⏱️ <b>{tf}</b> — {g.get("trials",0)} تركيبة']
             lines.append(
                 f'📚 البيانات الثابتة لهذه التركيبات: {g.get("raw_bars", 0)} شمعة خام | '
                 f'{g.get("usable_bars", 0)} قابلة للاستخدام'
