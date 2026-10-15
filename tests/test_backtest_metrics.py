@@ -24,6 +24,16 @@ class BacktestMetricTests(unittest.TestCase):
             with self.subTest(score=score):
                 self.assertEqual(GoldBacktest._score_band(score), band)
 
+    def test_group_win_rate_counts_profitable_timeouts(self):
+        trades = [
+            {"direction": "BUY", "result": "TP", "r": 2.0},
+            {"direction": "BUY", "result": "SL", "r": -1.0},
+            {"direction": "BUY", "result": "TIMEOUT", "r": 0.5},
+        ]
+        groups = GoldBacktest._groups(trades, "direction")
+        self.assertEqual(groups[0]["n"], 3)
+        self.assertAlmostEqual(groups[0]["wr"], 200.0 / 3.0)
+
     def test_timeout_streaks_follow_realized_r_not_exit_label(self):
         trades = [
             {"result": "TIMEOUT", "r": 0.5},
