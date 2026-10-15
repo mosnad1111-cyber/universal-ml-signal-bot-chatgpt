@@ -48,7 +48,7 @@ class Telegram:
             [{'text':'🥇 الذهب 15m','callback_data':'scan:GOLD:15m'}, {'text':'₿ البيتكوين 15m','callback_data':'scan:BTC:15m'}],
             [{'text':'🥇 الذهب 1h','callback_data':'scan:GOLD:1h'}, {'text':'₿ البيتكوين 1h','callback_data':'scan:BTC:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
-            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest'}],
+            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
@@ -68,7 +68,7 @@ class Telegram:
             try: self.db.set_setting('telegram_chat_id',cid)
             except Exception: pass
 
-    def _backtest(self,cid):
+    def _backtest(self,cid,asset_key='GOLD'):
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
@@ -79,14 +79,14 @@ class Telegram:
                 for tf, bars in (('5m', BACKTEST_BARS_5M), ('15m', BACKTEST_BARS_15M), ('1h', BACKTEST_BARS_1H)):
                     self.send(f'⏳ <b>جاري اختبار {tf}</b>\nتدريب Walk-Forward على {bars:,} شمعة تقريبًا…',cid)
                     try:
-                        results[tf]=bt.run(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY)
+                        results[tf]=bt.run(tf,bars=bars,retrain_every=BACKTEST_RETRAIN_EVERY,symbol=symbol)
                         if results[tf].get('error'):
                             self.send(f'⚠️ <b>{tf}</b> لم يكتمل: {results[tf]["error"]}',cid)
                         else:
                             r=results[tf]
                             self.send(f'✅ <b>انتهى اختبار {tf}</b>\nالشموع: {r.get("bars",0)}\nالصفقات: {r.get("trades",0)}\nWin Rate: {r.get("win_rate",0):.1f}%\nNet: {r.get("net_r",0):+.1f}R',cid)
                     except Exception as exc:
-                        results[tf]={'timeframe':tf,'error':f'{type(exc).__name__}: {exc}'}
+                        results[tf]={'timeframe':tf,'symbol':symbol,'asset_label':asset['label'],'error':f'{type(exc).__name__}: {exc}'}
                         self.send(f'❌ <b>فشل اختبار {tf}</b>\n{type(exc).__name__}: {exc}',cid)
                 report=bt.format_ar(results)
                 if not self.send_long(report,cid): self.send('⚠️ <b>اكتمل الـBacktest لكن تعذر إرسال أحد أجزاء التقرير.</b>',cid)
@@ -147,7 +147,9 @@ class Telegram:
                             except Exception as e: self.send(f'⚠️ تعذر تحليل {asset["label"]} الآن: {e}',cid)
                         elif data=='stats': self.send(self.engine.stats_text(),cid)
                         elif data=='diagnostics': self.send(self.engine.diagnostics_text(),cid)
-                        elif data=='backtest': self._backtest(cid)
+                        elif data=='backtest' or data.startswith('backtest:'):
+                            asset_key=data.split(':',1)[1] if ':' in data else 'GOLD'
+                            self._backtest(cid,asset_key)
                         elif data=='grid': self._grid_search(cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
