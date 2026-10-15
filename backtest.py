@@ -137,7 +137,7 @@ class GoldBacktest:
         for t in trades: groups.setdefault(t[key], []).append(t)
         out = []
         for k, a in groups.items():
-            n = len(a); w = sum(t['result'] == 'TP' for t in a); net = sum(t['r'] for t in a)
+            n = len(a); w = sum(float(t.get('r', 0.0)) > 0 for t in a); net = sum(t['r'] for t in a)
             gp = sum(max(t['r'], 0) for t in a); gl = abs(sum(min(t['r'], 0) for t in a))
             out.append({'key':k, 'n':n, 'wr':100*w/n, 'net':net, 'pf':gp/gl if gl else (float('inf') if gp else 0), 'e':net/n})
         return out
@@ -158,7 +158,7 @@ class GoldBacktest:
             if not a:
                 continue
             n = len(a)
-            w = sum(t['result'] == 'TP' for t in a)
+            w = sum(float(t.get('r', 0.0)) > 0 for t in a)
             net = sum(t['r'] for t in a)
             gp = sum(max(t['r'], 0) for t in a)
             gl = abs(sum(min(t['r'], 0) for t in a))
@@ -220,7 +220,7 @@ class GoldBacktest:
             if not a:
                 continue
             n = len(a)
-            w = sum(t['result'] == 'TP' for t in a)
+            w = sum(float(t.get('r', 0.0)) > 0 for t in a)
             net = sum(t['r'] for t in a)
             gp = sum(max(t['r'], 0) for t in a)
             gl = abs(sum(min(t['r'], 0) for t in a))
@@ -414,8 +414,10 @@ class GoldBacktest:
             i += 1
 
         n = len(trades)
-        w = sum(t['result'] == 'TP' for t in trades)
-        losses = sum(t['result'] == 'SL' for t in trades)
+        targets = sum(t['result'] == 'TP' for t in trades)
+        stops = sum(t['result'] == 'SL' for t in trades)
+        wins = sum(float(t.get('r', 0.0)) > 0 for t in trades)
+        losses = sum(float(t.get('r', 0.0)) < 0 for t in trades)
         timeouts = sum(t['result'] == 'TIMEOUT' for t in trades)
         net = sum(t['r'] for t in trades)
         gp = sum(max(t['r'], 0) for t in trades)
@@ -429,9 +431,9 @@ class GoldBacktest:
             'snapshot_start': x.index[0].isoformat() if len(x) else None,
             'snapshot_end': x.index[-1].isoformat() if len(x) else None,
             'snapshot_reused': prepared.get('snapshot_reused', False),
-            'trades': n, 'wins': w, 'losses': losses, 'timeouts': timeouts,
+            'trades': n, 'wins': wins, 'losses': losses, 'targets': targets, 'stops': stops, 'timeouts': timeouts,
             'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
-            'win_rate': 100*w/n if n else 0, 'net_r': net,
+            'win_rate': 100*wins/n if n else 0, 'net_r': net,
             'gross_profit_r': gp, 'gross_loss_r': gl,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
             'profit_factor': gp/gl if gl else (float('inf') if gp else 0),
@@ -590,7 +592,7 @@ class GoldBacktest:
                 lines.append(f'🗓️ النطاق: {r["snapshot_start"]} → {r["snapshot_end"]}')
             if r.get('snapshot_id'):
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {w} | ❌ وقف: {l} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
