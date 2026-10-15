@@ -102,6 +102,10 @@ class Engine:
             diag['min_score_required']=min_score; diag['min_ai_required']=min_ai
             setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,min_score,min_ai,context,diagnostics=diag)
             if not setup: self.last_diagnostics[tf]=diag; return None
+            if not signal_direction_allowed(tf, setup['direction']):
+                diag['reject'] = 'strategy_filter_' + tf + '_' + setup['direction'].lower()
+                self.last_diagnostics[tf]=diag
+                return None
             highs,lows=confirmed_pivots(df,PIVOT_LEN); rh=highs[-1][0] if highs else 0; rl=lows[-1][0] if lows else 0
             setup.update({'symbol':GOLD_DATA_SYMBOL,'timeframe':tf,'wave_key':f'{tf}:{rh}:{rl}:{setup["candle_time"]}'})
             if self.db.open_for(GOLD_DATA_SYMBOL,tf):
