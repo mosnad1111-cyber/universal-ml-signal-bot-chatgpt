@@ -364,6 +364,7 @@ class GoldBacktest:
         trades = []
         expired_unfilled = 0
         unresolved_at_end = 0
+        strategy_filtered = 0
         i = warmup
         while i < len(x) - 1:
             probs = predictions.get(i)
@@ -375,6 +376,10 @@ class GoldBacktest:
             setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT,
                                 min_score, min_ai, self._context(tf, row.name, x))
             if setup:
+                if not signal_direction_allowed(tf, setup['direction']):
+                    strategy_filtered += 1
+                    i += 1
+                    continue
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
                 if result == 'EXPIRED_UNFILLED':
@@ -433,6 +438,7 @@ class GoldBacktest:
             'snapshot_reused': prepared.get('snapshot_reused', False),
             'trades': n, 'wins': wins, 'losses': losses, 'targets': targets, 'stops': stops, 'timeouts': timeouts,
             'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
+            'strategy_filtered': strategy_filtered,
             'win_rate': 100*wins/n if n else 0, 'net_r': net,
             'gross_profit_r': gp, 'gross_loss_r': gl,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
@@ -592,7 +598,7 @@ class GoldBacktest:
                 lines.append(f'🗓️ النطاق: {r["snapshot_start"]} → {r["snapshot_end"]}')
             if r.get('snapshot_id'):
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
