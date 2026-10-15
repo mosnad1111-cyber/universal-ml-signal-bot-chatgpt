@@ -15,6 +15,7 @@ class Engine:
         self.ai = GoldAI()
         self.stop_event = threading.Event()
         self.last_model = 0
+        self.last_train_attempt = 0
         self.last_context = {}
         self.last_diagnostics = {tf: {} for tf in TIMEFRAMES}
         self.last_scan_at = {tf: 0 for tf in TIMEFRAMES}
@@ -82,7 +83,7 @@ class Engine:
                 else: self.ai.errors.setdefault(tf,'fit_returned_false')
             except Exception as exc:
                 self.model_training_ok[tf]=False; self.ai.errors[tf]=f'{type(exc).__name__}: {exc}'; traceback.print_exc()
-        self.last_model=time.time() if successes else 0; return successes
+        self.last_model=time.time() if successes == len(TIMEFRAMES) else 0; return successes
 
     def scan(self, tf):
         diag={'timeframe':tf,'scan_time':time.time(),'model_ready':tf in self.ai.models}; self.last_scan_at[tf]=diag['scan_time']; self.last_diagnostics[tf]=diag
@@ -201,9 +202,19 @@ class Engine:
             time.sleep(MONITOR_SECONDS)
 
     def scanner(self):
+        # Let Gunicorn finish importing the app and bind its HTTP port before
+        # CPU/memory-intensive model training starts during a rolling deploy.
+        if self.stop_event.wait(15):
+            return
         while not self.stop_event.is_set():
             try:
-                if time.time()-self.last_model>MODEL_REFRESH_HOURS*3600 or not self.ai.models: self.train_models()
+                now = time.time()
+                missing_models = any(tf not in self.ai.models for tf in TIMEFRAMES)
+                refresh_due = now - self.last_model > MODEL_REFRESH_HOURS * 3600
+                retry_ready = now - self.last_train_attempt >= 300
+                if (refresh_due or missing_models) and retry_ready:
+                    self.last_train_attempt = now
+                    self.train_models()
                 for tf in TIMEFRAMES:
                     try:
                         self.scan(tf)
