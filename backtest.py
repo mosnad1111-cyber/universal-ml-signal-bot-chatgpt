@@ -118,7 +118,13 @@ class GoldBacktest:
 
     @staticmethod
     def _score_band(v):
-        return '65-69' if float(v) < 70 else ('70-74' if float(v) < 75 else ('75-79' if float(v) < 80 else '80+'))
+        score = float(v)
+        if score < 60: return '<60'
+        if score < 65: return '60-64'
+        if score < 70: return '65-69'
+        if score < 75: return '70-74'
+        if score < 80: return '75-79'
+        return '80+'
 
     @staticmethod
     def _ai_band(v):
@@ -180,14 +186,18 @@ class GoldBacktest:
             if dd > max_dd:
                 max_dd = dd
                 trough_trade = idx
-            if t['result'] == 'TP':
+            # Streaks describe realized outcomes, not exit labels: a profitable
+            # TIMEOUT is a win and a losing TIMEOUT is a loss.
+            if float(t.get('r', 0.0)) > 0:
                 current_win += 1
                 current_loss = 0
                 max_win = max(max_win, current_win)
-            else:
+            elif float(t.get('r', 0.0)) < 0:
                 current_loss += 1
                 current_win = 0
                 max_loss = max(max_loss, current_loss)
+            else:
+                current_win = current_loss = 0
         return {'max_win_streak': max_win, 'max_loss_streak': max_loss,
                 'max_dd_r': max_dd, 'dd_peak_trade': peak_trade,
                 'dd_trough_trade': trough_trade}
@@ -422,6 +432,7 @@ class GoldBacktest:
             'trades': n, 'wins': w, 'losses': losses, 'timeouts': timeouts,
             'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
             'win_rate': 100*w/n if n else 0, 'net_r': net,
+            'gross_profit_r': gp, 'gross_loss_r': gl,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
             'profit_factor': gp/gl if gl else (float('inf') if gp else 0),
             'max_drawdown_r': self._dd(trades),
@@ -488,9 +499,7 @@ class GoldBacktest:
                     'usable_bars': int(r.get('usable_bars',0)),
                     'partial': bool(r.get('history_partial',False)),
                 })
-        default_score, default_ai = ((MIN_SCORE_5M, MIN_AI_PROB_5M) if tf == '5m' else
-                                     ((MIN_SCORE_1H, MIN_AI_PROB_1H) if tf == '1h' else
-                                      (MIN_SCORE, MIN_AI_PROB)))
+        default_score, default_ai = thresholds_for(tf)
         baseline = next((row for row in rows
                          if 'error' not in row and row['score'] == float(default_score)
                          and row['ai'] == float(default_ai)), None)
@@ -583,14 +592,14 @@ class GoldBacktest:
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
             lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {w} | ❌ وقف: {l} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
-            lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['65-69','70-74','75-79','80+'])
+            lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
             lines += ['🕒 <b>توزيع النتائج زمنيًا:</b>'] + GoldBacktest._fmt_groups(r.get('periods',[]),['النصف الأول','النصف الثاني'])
             lines += ['📅 <b>حسب أرباع الفترة:</b>'] + GoldBacktest._fmt_groups(r.get('quarters',[]),['الربع 1','الربع 2','الربع 3','الربع 4'])
             seq = r.get('sequence', {})
             lines += [f"🔥 أطول سلسلة ربح: {seq.get('max_win_streak',0)}", f"🧊 أطول سلسلة خسارة: {seq.get('max_loss_streak',0)}", f"📉 أقصى سحب محسوب من تسلسل الصفقات: {seq.get('max_dd_r',0):.1f}R", '']
-        gross_profit = sum(sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])) for tf in TIMEFRAMES)
-        gross_loss = abs(sum(min(t.get('r', 0), 0) for tf in TIMEFRAMES for t in results.get(tf, {}).get('trades_detail', [])))
+        gross_profit = sum(float(results.get(tf, {}).get('gross_profit_r', sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', []))) or 0.0) for tf in TIMEFRAMES)
+        gross_loss = sum(float(results.get(tf, {}).get('gross_loss_r', abs(sum(min(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])))) or 0.0) for tf in TIMEFRAMES)
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
         lines += [f'📌 <b>الإجمالي:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>Net:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
         return '\n'.join(lines)
