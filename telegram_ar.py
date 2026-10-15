@@ -1,7 +1,7 @@
 import time
 import threading
 import requests
-from config import TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
+from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
 
 class Telegram:
@@ -44,15 +44,16 @@ class Telegram:
 
     def keyboard(self):
         return {'inline_keyboard':[
-            [{'text':'🔍 تحليل الذهب 5 دقائق','callback_data':'scan:5m'}, {'text':'🔍 تحليل الذهب 15 دقيقة','callback_data':'scan:15m'}],
-            [{'text':'🔍 تحليل الذهب 1 ساعة','callback_data':'scan:1h'}],
+            [{'text':'🥇 الذهب 5m','callback_data':'scan:GOLD:5m'}, {'text':'₿ البيتكوين 5m','callback_data':'scan:BTC:5m'}],
+            [{'text':'🥇 الذهب 15m','callback_data':'scan:GOLD:15m'}, {'text':'₿ البيتكوين 15m','callback_data':'scan:BTC:15m'}],
+            [{'text':'🥇 الذهب 1h','callback_data':'scan:GOLD:1h'}, {'text':'₿ البيتكوين 1h','callback_data':'scan:BTC:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
-            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest تاريخي','callback_data':'backtest'}],
+            [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
-    def menu(self): return '🤖 <b>بوت تحليل الذهب بالذكاء الاصطناعي</b>\n\nاختر العملية من الأزرار بالأسفل 👇'
+    def menu(self): return '🤖 <b>بوت تحليل الذهب والبيتكوين بالذكاء الاصطناعي</b>\n\nاختر الأصل والفريم من الأزرار بالأسفل 👇'
 
     def send_menu(self,cid):
         if not self.base: return False
@@ -132,15 +133,18 @@ class Telegram:
                         try: requests.post(self.base+'/answerCallbackQuery',json={'callback_query_id':cb['id']},timeout=10)
                         except Exception: pass
                         if data.startswith('scan:'):
-                            tf=data.split(':',1)[1]
+                            parts=data.split(':')
+                            if len(parts)==3: asset_key,tf=parts[1],parts[2]
+                            else: asset_key,tf='GOLD',parts[1]
+                            asset=ASSETS.get(asset_key,ASSETS['GOLD']); symbol=asset['symbol']
                             try:
-                                s=self.engine.scan(tf)
+                                s=self.engine.scan(tf,symbol)
                                 if not s:
-                                    d=self.engine.last_diagnostics.get(tf,{})
-                                    labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'البيانات غير كافية','no_model_probabilities':'لا توجد نتيجة AI'}
+                                    d=self.engine.last_diagnostics.get(f'{symbol}|{tf}',{})
+                                    labels={'score_below_threshold':'الـScore أقل من الحد المطلوب','ai_below_threshold':'احتمال AI أقل من الحد المطلوب','risk_out_of_range':'المخاطرة خارج النطاق','model_not_ready':'النموذج غير جاهز','open_signal_exists':'توجد إشارة مفتوحة لهذا الفريم','telegram_not_ready':'Telegram غير جاهز لاستقبال الإشارة','telegram_send_failed':'تعذر إرسال الإشارة عبر Telegram','insufficient_feature_bars':'البيانات غير كافية','no_model_probabilities':'لا توجد نتيجة AI','strategy_filter_15m_buy':'إشارات 15m متوقفة مؤقتًا','strategy_filter_15m_sell':'إشارات 15m متوقفة مؤقتًا'}
                                     reason=labels.get(d.get('reject',''),d.get('reject','غير معروف'))
-                                    self.send(f'⚪ <b>لا توجد إشارة قوية الآن</b>\nالفريم: {tf}\n\n🔎 السبب: <b>{reason}</b>',cid)
-                            except Exception as e: self.send(f'⚠️ تعذر التحليل الآن: {e}',cid)
+                                    self.send(f'⚪ <b>لا توجد إشارة قوية الآن</b>\nالأصل: {asset["label"]}\nالفريم: {tf}\n\n🔎 السبب: <b>{reason}</b>',cid)
+                            except Exception as e: self.send(f'⚠️ تعذر تحليل {asset["label"]} الآن: {e}',cid)
                         elif data=='stats': self.send(self.engine.stats_text(),cid)
                         elif data=='diagnostics': self.send(self.engine.diagnostics_text(),cid)
                         elif data=='backtest': self._backtest(cid)
@@ -151,9 +155,9 @@ class Telegram:
                             else:
                                 lines=['📋 <b>آخر الإشارات</b>','']
                                 for s in rows:
-                                    icon='🟢' if s['direction']=='BUY' else '🔴'; lines.append(f'{icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
+                                    icon='🟢' if s['direction']=='BUY' else '🔴'; asset=next((a for a in ASSETS.values() if a['symbol']==s['symbol']), {'label':s['symbol']}); lines.append(f'{asset["label"]} | {icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
                                 self.send('\n'.join(lines),cid)
-                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب فقط\n⏱️ 5m / 15m / 1H\n🤖 XGBoost / AI تدريبي\n📡 مراقبة الإشارات مفعلة',cid)
+                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب: TVC:GOLD\n₿ البيتكوين: BINANCE:BTCUSDT\n⏱️ 5m / 15m / 1H لكل أصل\n🤖 نموذج AI مستقل لكل أصل وفريم\n📡 مراقبة الدخول وSL/TP مفعلة',cid)
             except Exception: time.sleep(5)
 
     def start(self,engine):
