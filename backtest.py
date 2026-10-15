@@ -578,7 +578,7 @@ class GoldBacktest:
 
     @staticmethod
     def format_ar(results):
-        lines = ['🧪 <b>Backtest حقيقي — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','']; total = wins = 0; net = 0.0
+        lines = ['🧪 <b>Backtest حقيقي — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','⚠️ النتائج إجمالية قبل السبريد والانزلاق والعمولات.','⚠️ نوافذ البيانات تختلف بين الأطر؛ مجموع R ليس محاكاة لمحفظة متزامنة.','']; total = wins = 0; net = 0.0
         for tf in TIMEFRAMES:
             r = results.get(tf,{})
             if r.get('error'):
@@ -603,5 +603,5 @@ class GoldBacktest:
         gross_profit = sum(float(results.get(tf, {}).get('gross_profit_r', sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', []))) or 0.0) for tf in TIMEFRAMES)
         gross_loss = sum(float(results.get(tf, {}).get('gross_loss_r', abs(sum(min(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])))) or 0.0) for tf in TIMEFRAMES)
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
-        lines += [f'📌 <b>الإجمالي:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>Net:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
+        lines += [f'📌 <b>مجموع الأطر:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>مجموع صافي R عبر الأطر:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
         return '\n'.join(lines)
