@@ -6,8 +6,8 @@ import pandas as pd
 
 warnings.filterwarnings('ignore')
 
-# IMPORTANT: this bot now requests the same TradingView instrument shown by the user:
-# TVC:GOLD = CFDs on Gold (US$ / OZ).
+# Instruments are selected by their TradingView symbol (e.g. TVC:GOLD, BINANCE:BTCUSDT).
+from config import ASSETS
 try:
     from tvDatafeed import TvDatafeed, Interval
 except Exception as exc:
@@ -40,7 +40,7 @@ def _get_tv():
 
 def _normalize_tv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        raise RuntimeError('TradingView أعاد بيانات فارغة للرمز TVC:GOLD.')
+        raise RuntimeError('TradingView أعاد بيانات فارغة للرمز المطلوب.')
     x = df.copy().rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'})
     required = ['Open','High','Low','Close']
     missing = [c for c in required if c not in x.columns]
@@ -78,7 +78,7 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     requested_bars = int(period or PERIODS[timeframe])
     # The requested history is part of the cache key. Previously, a cached 5000-bar
     # live result could silently satisfy a 15000-bar backtest request.
-    cache_key = (timeframe, requested_bars)
+    cache_key = (symbol, timeframe, requested_bars)
     now = time.time()
     with _cache_lock:
         item = _cache.get(cache_key)
@@ -92,7 +92,10 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                 try:
                     tv = _get_tv()
                     interval = getattr(Interval, INTERVALS[timeframe])
-                    raw = tv.get_hist(symbol='GOLD', exchange='TVC', interval=interval, n_bars=n_bars, extended_session=True)
+                    asset = next((a for a in ASSETS.values() if a['symbol'] == symbol), None)
+                    if asset is None:
+                        raise RuntimeError(f'رمز سوق غير مدعوم: {symbol}')
+                    raw = tv.get_hist(symbol=asset['ticker'], exchange=asset['exchange'], interval=interval, n_bars=n_bars, extended_session=True)
                     df = _normalize_tv(raw)
                     with _cache_lock:
                         _cache[cache_key] = (time.time(), df.copy())
@@ -108,7 +111,7 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                         time.sleep(delay)
             if size_index < len(_bar_sizes(requested_bars)) - 1:
                 time.sleep(2.0)
-    raise RuntimeError('تعذر جلب بيانات الذهب TVC:GOLD بعد التدرج في حجم البيانات. ' + ' | '.join(errors))
+    raise RuntimeError(f'تعذر جلب بيانات السوق {symbol} بعد التدرج في حجم البيانات. ' + ' | '.join(errors))
 
 
 def _rsi(close, n=14):
