@@ -275,3 +275,20 @@ class Engine:
                 else:
                     lines.append(f'{tf}: ❌ {ai.errors.get(tf, "غير متوفر")}')
         return '\\n'.join(lines)
+
+    def start(self):
+        """Start the background market scanner and open-trade monitor."""
+        if getattr(self, "_started", False):
+            return
+        self._started = True
+        self.stop_event.clear()
+        threading.Thread(
+            target=self.scanner,
+            name="market-scanner",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self.monitor,
+            name="trade-monitor",
+            daemon=True,
+        ).start()
