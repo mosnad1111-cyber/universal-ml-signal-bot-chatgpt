@@ -72,7 +72,8 @@ class Telegram:
         if self.backtest_running:
             self.send('⏳ <b>الـBacktest يعمل حاليًا</b>\nانتظر النتيجة الحالية قبل تشغيل اختبار آخر.',cid); return
         self.backtest_running=True
-        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع</b>\n\nWalk-Forward على TVC:GOLD\nالفريمات: 5m / 15m / 1H\nالشموع المستهدفة: حسب إعداد كل فريم\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\n\n⏳ جاري تجهيز البيانات…',cid)
+        asset=ASSETS.get(asset_key,ASSETS['GOLD']); symbol=asset['symbol']
+        self.send(f'🧪 <b>بدأ Backtest تاريخي موسّع — {asset["label"]}</b>\\n\\nWalk-Forward على {symbol}\\nالفريمات: 5m / 15m / 1H\\nالشموع المستهدفة: حسب إعداد كل فريم\\nإعادة التدريب كل: {BACKTEST_RETRAIN_EVERY}\\n\\n⏳ جاري تجهيز البيانات…',cid)
         def work():
             try:
                 bt=GoldBacktest(); results={}
