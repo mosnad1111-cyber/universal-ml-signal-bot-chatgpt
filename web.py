@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-from config import GOLD_DATA_SYMBOL, TIMEFRAMES, DB_PATH, thresholds_for
+from config import ASSETS, GOLD_DATA_SYMBOL, TIMEFRAMES, DB_PATH, thresholds_for
 from telegram_ar import Telegram
 from engine import Engine
 from db import DB
@@ -21,9 +21,9 @@ def active_thresholds():
 def home():
     return jsonify({
         'ok': True,
-        'service': 'gold-ai-telegram-bot',
+        'service': 'gold-bitcoin-ai-telegram-bot',
+        'assets': {key: {'symbol': value['symbol'], 'label': value['label']} for key, value in ASSETS.items()},
         'symbol': GOLD_DATA_SYMBOL,
-        'data_feed': GOLD_DATA_SYMBOL,
         'timeframes': TIMEFRAMES,
         'active_thresholds': active_thresholds(),
     })
