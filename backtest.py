@@ -343,7 +343,7 @@ class GoldBacktest:
         x = prepared['features']
         history_partial = prepared['history_partial']
         if len(x) < 1200:
-            return {'timeframe':tf, 'error':f'insufficient_bars:{len(x)}',
+            return {'timeframe':tf, 'symbol':symbol, 'asset_label':next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol), 'error':f'insufficient_bars:{len(x)}',
                     'requested_bars':requested_bars,
                     'raw_bars':prepared.get('received_bars', len(raw)),
                     'completed_bars':len(raw), 'usable_bars':len(x),
