@@ -478,7 +478,7 @@ class GoldBacktest:
         # is deterministic (fixed random_state) so thresholds are the only
         # variable affecting trade acceptance.
         requested_bars = self._requested_bars(tf, bars)
-        prepared = self._prepare(tf, requested_bars)
+        prepared = self._prepare(tf, requested_bars, symbol)
         predictions = None
         if len(prepared['features']) >= 1200:
             predictions = self._walk_forward_predictions(
@@ -586,7 +586,8 @@ class GoldBacktest:
 
     @staticmethod
     def format_ar(results):
-        lines = ['🧪 <b>Backtest حقيقي — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','⚠️ النتائج إجمالية قبل السبريد والانزلاق والعمولات.','⚠️ نوافذ البيانات تختلف بين الأطر؛ مجموع R ليس محاكاة لمحفظة متزامنة.','']; total = wins = 0; net = 0.0
+        asset_label = next((r.get('asset_label') for r in results.values() if r.get('asset_label')), 'الذهب')
+        lines = [f'🧪 <b>Backtest حقيقي — {asset_label} — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','⚠️ النتائج إجمالية قبل السبريد والانزلاق والعمولات.','⚠️ نوافذ البيانات تختلف بين الأطر؛ مجموع R ليس محاكاة لمحفظة متزامنة.','']; total = wins = 0; net = 0.0
         for tf in TIMEFRAMES:
             r = results.get(tf,{})
             if r.get('error'):
