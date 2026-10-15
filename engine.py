@@ -225,22 +225,53 @@ class Engine:
             time.sleep(SCAN_SECONDS)
 
     def stats_text(self):
-        lines=['📊 <b>إحصائيات الأصول</b>']
+        lines = ['📊 <b>إحصائيات الأصول</b>']
+        recent = self.db.recent(1000)
         for asset in ASSETS.values():
-            symbol=asset['symbol']; ai=self.ai[symbol]
-            rows=[r for r in self.db.recent(500) if r['symbol']==symbol and r['status']=='CLOSED']
-            total=len(rows); targets=sum(r['result']=='TP' for r in rows); stops=sum(r['result']=='SL' for r in rows); timeouts=sum(r['result']=='TIMEOUT' for r in rows)
-            profitable=losing=0; net_r=0.0
-            for r in rows:
-                risk=abs(float(r['entry'])-float(r['sl']))
-                if not risk: continue
-                realized=abs(float(r['tp'])-float(r['entry']))/risk if r['result']=='TP' else (-1.0 if r['result']=='SL' else (((float(r['close_price'])-float(r['entry'])) if r['direction']=='BUY' else (float(r['entry'])-float(r['close_price'])))/risk if r['close_price'] is not None else 0.0))
-                net_r+=realized
-                if realized>0: profitable+=1
-                elif realized<0: losing+=1
-            wr=100*profitable/total if total else 0
-            lines += ['',f'{asset["icon"]} <b>{asset["label"]}</b>',f'الصفقات المغلقة: <b>{total}</b>',f'✅ الهدف: {targets} | ❌ الوقف: {stops} | ⏳ المهلة: {timeouts}',f'📈 نسبة الربح الفعلية: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة: <b>{net_r:+.1f}R</b>','🧠 <b>تحقق النموذج</b>']
+            symbol = asset['symbol']
+            ai = self.ai[symbol]
+            rows = [r for r in recent if r['symbol'] == symbol and r['status'] == 'CLOSED']
+            targets = sum(r['result'] == 'TP' for r in rows)
+            stops = sum(r['result'] == 'SL' for r in rows)
+            timeouts = sum(r['result'] == 'TIMEOUT' for r in rows)
+            profitable = 0
+            losing = 0
+            net_r = 0.0
+            for row in rows:
+                risk = abs(float(row['entry']) - float(row['sl']))
+                if risk <= 0:
+                    continue
+                if row['result'] == 'TP':
+                    realized_r = abs(float(row['tp']) - float(row['entry'])) / risk
+                elif row['result'] == 'SL':
+                    realized_r = -1.0
+                elif row['close_price'] is not None:
+                    move = float(row['close_price']) - float(row['entry'])
+                    if row['direction'] == 'SELL':
+                        move = -move
+                    realized_r = move / risk
+                else:
+                    realized_r = 0.0
+                net_r += realized_r
+                if realized_r > 0:
+                    profitable += 1
+                elif realized_r < 0:
+                    losing += 1
+            wr = 100 * profitable / len(rows) if rows else 0
+            lines += [
+                '',
+                f'{asset["icon"]} <b>{asset["label"]}</b>',
+                f'الصفقات المغلقة: <b>{len(rows)}</b>',
+                f'✅ الهدف: {targets} | ❌ الوقف: {stops} | ⏳ المهلة: {timeouts}',
+                f'📈 نسبة الربح الفعلية: <b>{wr:.1f}%</b>',
+                f'⚖️ صافي النتيجة: <b>{net_r:+.1f}R</b>',
+                '🧠 <b>تحقق النموذج</b>'
+            ]
+            metrics = ai.info()
             for tf in TIMEFRAMES:
-                v=ai.info().get(tf,{})
-                lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}' if v else f'{tf}: ❌ {ai.errors.get(tf,"غير متوفر")}')
-        return '\n'.join(lines)
+                value = metrics.get(tf, {})
+                if value:
+                    lines.append(f'{tf}: {value.get("engine", "-")} | AUC {value.get("auc", 0):.3f} | Acc {value.get("accuracy", 0):.3f}')
+                else:
+                    lines.append(f'{tf}: ❌ {ai.errors.get(tf, "غير متوفر")}')
+        return '\\n'.join(lines)
