@@ -244,20 +244,3 @@ class Engine:
                 v=ai.info().get(tf,{})
                 lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}' if v else f'{tf}: ❌ {ai.errors.get(tf,"غير متوفر")}')
         return '\n'.join(lines)
-
-
-        total,targets,stops,timeouts,net_r,profitable,losing=self.db.closed_stats()
-        wr=100*profitable/total if total else 0
-        m=self.ai.info()
-        lines=['📊 <b>إحصائيات الذهب</b>','','الصفقات المغلقة: <b>%d</b>'%total,'✅ وصلت إلى الهدف: <b>%d</b>'%targets,'❌ ضربت وقف الخسارة: <b>%d</b>'%stops,'⏳ أُغلقت بانتهاء المهلة: <b>%d</b>'%timeouts,f'🟢 صفقات رابحة فعليًا: <b>{profitable}</b>',f'🔴 صفقات خاسرة فعليًا: <b>{losing}</b>',f'📈 نسبة الصفقات الرابحة: <b>{wr:.1f}%</b>',f'⚖️ صافي النتيجة المحققة: <b>{net_r:+.1f}R</b>','','🧠 <b>XGBoost — تحقق النموذج</b>']
-        for tf in TIMEFRAMES:
-            v=m.get(tf,{})
-            if v:
-                lines.append(f'{tf}: {v.get("engine","-")} | AUC {v.get("auc",0):.3f} | Acc {v.get("accuracy",0):.3f}')
-                lines.append(f'   عينات تدريب/تحقق: {v.get("training_rows",0)}/{v.get("validation_rows",0)} | baseline {v.get("validation_baseline_accuracy",0):.3f} | شموع عزل: {v.get("purged_candles",0)}')
-                if 'buy_auc' in v or 'sell_auc' in v: lines.append(f'   AUC شراء: {v.get("buy_auc",0):.3f} | AUC بيع: {v.get("sell_auc",0):.3f}')
-                lines.append(f'   Brier: {v.get("validation_brier",0):.4f}')
-                top=v.get('top_features',[])
-                if top: lines.append('   أهم العوامل: ' + ', '.join(f'{z["feature"]}={z["importance"]:.3f}' for z in top[:5]))
-            else: lines.append(f'{tf}: ❌ {self.ai.errors.get(tf,"غير متوفر")}')
-        return '\n'.join(lines)
