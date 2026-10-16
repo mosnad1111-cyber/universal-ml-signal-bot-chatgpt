@@ -365,6 +365,7 @@ class GoldBacktest:
         expired_unfilled = 0
         unresolved_at_end = 0
         strategy_filtered = 0
+        live_config_filtered = 0
         i = warmup
         while i < len(x) - 1:
             probs = predictions.get(i)
@@ -378,6 +379,10 @@ class GoldBacktest:
             if setup:
                 if not signal_direction_allowed(tf, setup['direction']):
                     strategy_filtered += 1
+                    # Separate live-config suppressions from strategy setup filters.
+                    if ((tf == '15m' and DISABLE_15M_SIGNALS) or
+                            (tf == '1h' and setup['direction'] == 'SELL' and DISABLE_1H_SELL_SIGNALS)):
+                        live_config_filtered += 1
                     i += 1
                     continue
                 start = raw.index.searchsorted(row.name, side='right')
@@ -439,6 +444,11 @@ class GoldBacktest:
             'trades': n, 'wins': wins, 'losses': losses, 'targets': targets, 'stops': stops, 'timeouts': timeouts,
             'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
             'strategy_filtered': strategy_filtered,
+            'live_config_filtered': live_config_filtered,
+            'live_config_restrictions': {
+                '15m_disabled': bool(tf == '15m' and DISABLE_15M_SIGNALS),
+                '1h_sell_disabled': bool(tf == '1h' and DISABLE_1H_SELL_SIGNALS),
+            },
             'win_rate': 100*wins/n if n else 0, 'net_r': net,
             'gross_profit_r': gp, 'gross_loss_r': gl,
             'avg_score': sum(t['score'] for t in trades)/n if n else 0,
@@ -601,7 +611,12 @@ class GoldBacktest:
                 lines.append(f'🗓️ النطاق: {r["snapshot_start"]} → {r["snapshot_end"]}')
             if r.get('snapshot_id'):
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            restrictions = r.get('live_config_restrictions', {})
+            if restrictions.get('15m_disabled'):
+                lines.append('🚫 تنبيه إعدادات: إشارات 15m معطّلة حاليًا في إعدادات التشغيل الحي (DISABLE_15M_SIGNALS=true)، لذا لن تُحسب صفقات لهذا الإطار.')
+            if restrictions.get('1h_sell_disabled'):
+                lines.append('🚫 تنبيه إعدادات: إشارات SELL على إطار 1h معطّلة في إعدادات التشغيل الحي.')
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاتجاه/التشغيل: {r.get("strategy_filtered",0)}',f'⚙️ المرفوض بسبب إعدادات التشغيل الحي: {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
@@ -612,5 +627,7 @@ class GoldBacktest:
         gross_profit = sum(float(results.get(tf, {}).get('gross_profit_r', sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', []))) or 0.0) for tf in TIMEFRAMES)
         gross_loss = sum(float(results.get(tf, {}).get('gross_loss_r', abs(sum(min(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])))) or 0.0) for tf in TIMEFRAMES)
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
-        lines += [f'📌 <b>مجموع الأطر:</b> {total} صفقة',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}%',f'⚖️ <b>مجموع صافي R عبر الأطر:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
+        total_losses = sum(int(results.get(tf, {}).get('losses', 0) or 0) for tf in TIMEFRAMES)
+        total_flats = max(0, total - wins - total_losses)
+        lines += [f'📌 <b>مجموع الأطر:</b> {total} صفقة',f'🟢 <b>رابحة حسب R:</b> {wins} | 🔴 <b>خاسرة حسب R:</b> {total_losses} | ⚪ <b>تعادل:</b> {total_flats}',f'🎯 <b>Win Rate:</b> {(100*wins/total if total else 0):.1f}% ({wins}/{total})',f'⚖️ <b>مجموع صافي R عبر الأطر:</b> {net:+.1f}R',f'💰 <b>Profit Factor:</b> {pf}','','⚠️ صافي R المجمّع عبر أطر ذات نوافذ مختلفة ليس محاكاة لمحفظة متزامنة.','⚠️ هذا اختبار تاريخي وليس ضمانًا للنتائج المستقبلية.','⚠️ الإحصاءات لا تعني أن الـAI يتنبأ بالربح يقينًا.']
         return '\n'.join(lines)
