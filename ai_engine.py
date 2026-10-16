@@ -62,6 +62,7 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
             continue
 
         active = False
+        activation_j = None
         for j in range(i + 1, min(len(x), i + horizon + 1)):
             if not active:
                 if not (low[j] <= entry <= high[j]):
@@ -71,6 +72,7 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
                         break
                     continue
                 active = True
+                activation_j = j
 
             hit_target = high[j] >= target if direction == 1 else low[j] <= target
             hit_stop = low[j] <= stop if direction == 1 else high[j] >= stop
@@ -86,7 +88,7 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
                 # reached before TP (price may have gapped across Entry). Label
                 # this ambiguous case as a loss rather than leak optimistic
                 # target outcomes into training.
-                y[i] = 0 if j == i + 1 else 1
+                y[i] = 0 if j == activation_j else 1
                 break
     return pd.Series(y, index=x.index)
 
