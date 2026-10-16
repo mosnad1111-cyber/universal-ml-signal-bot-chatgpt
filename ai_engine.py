@@ -82,7 +82,11 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
                 y[i] = 0
                 break
             if hit_target:
-                y[i] = 1
+                # On the activation candle, OHLC cannot prove that Entry was
+                # reached before TP (price may have gapped across Entry). Label
+                # this ambiguous case as a loss rather than leak optimistic
+                # target outcomes into training.
+                y[i] = 0 if j == i + 1 else 1
                 break
     return pd.Series(y, index=x.index)
 
