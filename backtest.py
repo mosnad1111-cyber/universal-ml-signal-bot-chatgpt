@@ -377,14 +377,12 @@ class GoldBacktest:
             setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT,
                                 min_score, min_ai, self._context(tf, row.name, x))
             if setup:
-                if not signal_direction_allowed(tf, setup['direction']):
-                    strategy_filtered += 1
-                    # Separate live-config suppressions from strategy setup filters.
-                    if ((tf == '15m' and DISABLE_15M_SIGNALS) or
-                            (tf == '1h' and setup['direction'] == 'SELL' and DISABLE_1H_SELL_SIGNALS)):
-                        live_config_filtered += 1
-                    i += 1
-                    continue
+                # Backtest evaluates the strategy independently of live signal
+                # suppression switches. Count live-blocked setups for diagnostics,
+                # but simulate them so disabled timeframes/directions can be assessed.
+                if ((tf == '15m' and DISABLE_15M_SIGNALS) or
+                        (tf == '1h' and setup['direction'] == 'SELL' and DISABLE_1H_SELL_SIGNALS)):
+                    live_config_filtered += 1
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
                 if result == 'EXPIRED_UNFILLED':
@@ -597,7 +595,7 @@ class GoldBacktest:
     @staticmethod
     def format_ar(results):
         asset_label = next((r.get('asset_label') for r in results.values() if r.get('asset_label')), 'الذهب')
-        lines = [f'🧪 <b>Backtest حقيقي — {asset_label} — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','⚠️ النتائج إجمالية قبل السبريد والانزلاق والعمولات.','⚠️ نوافذ البيانات تختلف بين الأطر؛ مجموع R ليس محاكاة لمحفظة متزامنة.','']; total = wins = 0; net = 0.0
+        lines = [f'🧪 <b>Backtest حقيقي — {asset_label} — Walk-Forward</b>','','اختبار زمني بدون استخدام شموع المستقبل في تدريب النموذج.','الاختبار يقيس الاستراتيجية حتى على الفريمات/الاتجاهات المعطّلة في التشغيل الحي؛ نتائجها بحثية ولا تعني أن البوت سيرسلها.','الدخول لا يُحسب صفقة إلا بعد لمس Entry فعليًا.','عند لمس SL وTP داخل نفس الشمعة تُحسب SL بشكل محافظ.','⚠️ النتائج إجمالية قبل السبريد والانزلاق والعمولات.','⚠️ نوافذ البيانات تختلف بين الأطر؛ مجموع R ليس محاكاة لمحفظة متزامنة.','']; total = wins = 0; net = 0.0
         for tf in TIMEFRAMES:
             r = results.get(tf,{})
             if r.get('error'):
@@ -613,10 +611,10 @@ class GoldBacktest:
                 lines.append(f'🧾 معرّف اللقطة: {r["snapshot_id"]}')
             restrictions = r.get('live_config_restrictions', {})
             if restrictions.get('15m_disabled'):
-                lines.append('🚫 تنبيه إعدادات: إشارات 15m معطّلة حاليًا في إعدادات التشغيل الحي (DISABLE_15M_SIGNALS=true)، لذا لن تُحسب صفقات لهذا الإطار.')
+                lines.append('🧪 ملاحظة: إشارات 15m معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
             if restrictions.get('1h_sell_disabled'):
-                lines.append('🚫 تنبيه إعدادات: إشارات SELL على إطار 1h معطّلة في إعدادات التشغيل الحي.')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاتجاه/التشغيل: {r.get("strategy_filtered",0)}',f'⚙️ المرفوض بسبب إعدادات التشغيل الحي: {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+                lines.append('🧪 ملاحظة: إشارات SELL على 1h معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
