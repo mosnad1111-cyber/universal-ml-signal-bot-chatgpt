@@ -108,6 +108,12 @@ class GoldBacktest:
             hit_sl, hit_tp = ((lo <= sl, hi >= tp) if d == 'BUY' else (hi >= sl, lo <= tp))
             if hit_sl and hit_tp:
                 return 'SL', j, act_j
+            # OHLC bars do not reveal whether TP was reached before or after
+            # Entry when both are touched in the activation candle. Never grant
+            # an optimistic TP in this ambiguous case; record it separately and
+            # score it as a conservative -1R in the report.
+            if hit_tp and act_j == j:
+                return 'AMBIGUOUS_ENTRY_CANDLE', j, act_j
             if hit_tp:
                 return 'TP', j, act_j
             if hit_sl:
@@ -393,7 +399,7 @@ class GoldBacktest:
                 if result:
                     if result == 'TP':
                         r = float(RR)
-                    elif result == 'SL':
+                    elif result in ('SL', 'AMBIGUOUS_ENTRY_CANDLE'):
                         r = -1.0
                     else:
                         risk = abs(float(setup['entry']) - float(setup['sl']))
@@ -409,9 +415,12 @@ class GoldBacktest:
                         'ai_band': self._ai_band(setup['ai_prob']),
                         'result': result,
                         'r': float(r),
+                        'entry': float(setup['entry']),
+                        'sl': float(setup['sl']),
+                        'tp': float(setup['tp']),
                         'activation_time': raw.index[act_j].isoformat() if act_j is not None else None,
                         'exit_time': raw.index[end_j].isoformat(),
-                        'exit_price': float(raw['Close'].iloc[end_j]) if result == 'TIMEOUT' else (float(setup['tp']) if result == 'TP' else float(setup['sl'])),
+                        'exit_price': float(raw['Close'].iloc[end_j]) if result in ('TIMEOUT', 'AMBIGUOUS_ENTRY_CANDLE') else (float(setup['tp']) if result == 'TP' else float(setup['sl'])),
                     })
                     # Skip candles until TP/SL or the explicit timeout.
                     i = max(i + 1, end_j + 1)
@@ -427,6 +436,7 @@ class GoldBacktest:
         wins = sum(float(t.get('r', 0.0)) > 0 for t in trades)
         losses = sum(float(t.get('r', 0.0)) < 0 for t in trades)
         timeouts = sum(t['result'] == 'TIMEOUT' for t in trades)
+        ambiguous_entry_candle = sum(t['result'] == 'AMBIGUOUS_ENTRY_CANDLE' for t in trades)
         net = sum(t['r'] for t in trades)
         gp = sum(max(t['r'], 0) for t in trades)
         gl = abs(sum(min(t['r'], 0) for t in trades))
@@ -441,6 +451,7 @@ class GoldBacktest:
             'snapshot_reused': prepared.get('snapshot_reused', False),
             'trades': n, 'wins': wins, 'losses': losses, 'targets': targets, 'stops': stops, 'timeouts': timeouts,
             'expired_unfilled': expired_unfilled, 'unresolved_at_end': unresolved_at_end,
+            'ambiguous_entry_candle': ambiguous_entry_candle,
             'strategy_filtered': strategy_filtered,
             'live_config_filtered': live_config_filtered,
             'live_config_restrictions': {
@@ -614,14 +625,21 @@ class GoldBacktest:
                 lines.append('🧪 ملاحظة: إشارات 15m معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
             if restrictions.get('1h_sell_disabled'):
                 lines.append('🧪 ملاحظة: إشارات SELL على 1h معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🟠 TP في شمعة التفعيل (ملتبس وحُسب -1R تحفظيًا): {r.get("ambiguous_entry_candle",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
             lines += ['🕒 <b>توزيع النتائج زمنيًا:</b>'] + GoldBacktest._fmt_groups(r.get('periods',[]),['النصف الأول','النصف الثاني'])
             lines += ['📅 <b>حسب أرباع الفترة:</b>'] + GoldBacktest._fmt_groups(r.get('quarters',[]),['الربع 1','الربع 2','الربع 3','الربع 4'])
             seq = r.get('sequence', {})
-            lines += [f"🔥 أطول سلسلة ربح: {seq.get('max_win_streak',0)}", f"🧊 أطول سلسلة خسارة: {seq.get('max_loss_streak',0)}", f"📉 أقصى سحب محسوب من تسلسل الصفقات: {seq.get('max_dd_r',0):.1f}R", '']
+            lines += [f"🔥 أطول سلسلة ربح: {seq.get('max_win_streak',0)}", f"🧊 أطول سلسلة خسارة: {seq.get('max_loss_streak',0)}", f"📉 أقصى سحب محسوب من تسلسل الصفقات: {seq.get('max_dd_r',0):.1f}R"]
+            if tf == '15m' and r.get('trades_detail'):
+                lines.append('🔎 تفاصيل صفقات 15m (للتشخيص فقط):')
+                for t in r['trades_detail'][-12:]:
+                    stamp = pd.Timestamp(t['time']).strftime('%m-%d %H:%M')
+                    result_label = 'TP' if t['result'] == 'TP' else ('SL' if t['result'] == 'SL' else ('ملتبس' if t['result'] == 'AMBIGUOUS_ENTRY_CANDLE' else 'مهلة'))
+                    lines.append(f"   {stamp} {t['direction']} | Score {t['score']:.0f} | AI {t['ai']*100:.0f}% | Entry {t.get('entry',0):.2f} | {result_label} | {t['r']:+.2f}R")
+            lines.append('')
         gross_profit = sum(float(results.get(tf, {}).get('gross_profit_r', sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', []))) or 0.0) for tf in TIMEFRAMES)
         gross_loss = sum(float(results.get(tf, {}).get('gross_loss_r', abs(sum(min(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', [])))) or 0.0) for tf in TIMEFRAMES)
         pf = gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0); pf = '∞' if np.isinf(pf) else f'{pf:.2f}'
