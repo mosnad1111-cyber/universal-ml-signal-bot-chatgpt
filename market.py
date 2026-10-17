@@ -131,6 +131,20 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
         if item and now - item[0] < CACHE_SECONDS:
             return item[1].copy()
 
+    # BTC's Binance REST endpoint is the primary source: unlike the anonymous
+    # TradingView WebSocket it does not depend on a long-lived socket, and keeps
+    # market scans from blocking for repeated WebSocket reconnect delays.
+    if symbol == 'BINANCE:BTCUSDT':
+        try:
+            df = _fetch_binance_rest(timeframe, requested_bars)
+            with _cache_lock:
+                _cache[cache_key] = (time.time(), df.copy())
+            return df
+        except Exception as exc:
+            rest_error = f'Binance REST primary: {type(exc).__name__}: {exc}'
+    else:
+        rest_error = None
+
     errors = []
     with _tv_lock:
         for size_index, n_bars in enumerate(_bar_sizes(requested_bars)):
@@ -157,16 +171,8 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                         time.sleep(delay)
             if size_index < len(_bar_sizes(requested_bars)) - 1:
                 time.sleep(2.0)
-    # TradingView's anonymous WebSocket can drop repeatedly on Render. BTC has
-    # an independent public REST feed, so recover without changing signal rules.
-    if symbol == 'BINANCE:BTCUSDT':
-        try:
-            df = _fetch_binance_rest(timeframe, requested_bars)
-            with _cache_lock:
-                _cache[cache_key] = (time.time(), df.copy())
-            return df
-        except Exception as exc:
-            errors.append(f'Binance REST fallback: {type(exc).__name__}: {exc}')
+    if rest_error:
+        errors.append(rest_error)
     raise RuntimeError(f'تعذر جلب بيانات السوق {symbol} بعد التدرج في حجم البيانات. ' + ' | '.join(errors))
 
 
