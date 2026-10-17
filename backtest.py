@@ -324,7 +324,7 @@ class GoldBacktest:
             if last_fit < 0 or i - last_fit >= step:
                 model = GoldAI()
                 ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
-                               sl_atr_mult=SL_ATR_MULT)
+                               sl_atr_mult=SL_ATR_MULT, fast_mode=True)
                 if not ok:
                     continue
                 last_fit = i
