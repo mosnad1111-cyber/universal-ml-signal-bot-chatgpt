@@ -3,6 +3,7 @@ import warnings
 import threading
 import numpy as np
 import pandas as pd
+import requests
 
 warnings.filterwarnings('ignore')
 
@@ -72,6 +73,51 @@ def _bar_sizes(preferred: int):
     return sizes
 
 
+
+def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
+    """Fallback BTC/USDT feed using Binance's public REST klines endpoint."""
+    asset = next((a for a in ASSETS.values() if a['symbol'] == 'BINANCE:BTCUSDT'), None)
+    if asset is None:
+        raise RuntimeError('إعداد BTC/USDT غير موجود.')
+    interval = {'5m': '5m', '15m': '15m', '1h': '1h'}[timeframe]
+    remaining = max(250, int(requested_bars))
+    end_time = None
+    pages = []
+    while remaining > 0:
+        limit = min(1000, remaining)
+        params = {'symbol': asset['ticker'], 'interval': interval, 'limit': limit}
+        if end_time is not None:
+            params['endTime'] = end_time
+        response = requests.get(
+            'https://api.binance.com/api/v3/klines',
+            params=params, timeout=(5, 15),
+            headers={'User-Agent': 'universal-ml-signal-bot/1.0'},
+        )
+        response.raise_for_status()
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        pages.extend(batch)
+        remaining -= len(batch)
+        oldest_open = int(batch[0][0])
+        if len(batch) < limit or oldest_open <= 0:
+            break
+        end_time = oldest_open - 1
+    if len(pages) < 250:
+        raise RuntimeError(f'Binance REST أعاد {len(pages)} شمعة فقط.')
+    frame = pd.DataFrame(pages, columns=[
+        'open_time','Open','High','Low','Close','Volume','close_time',
+        'quote_volume','trades','taker_buy_base','taker_buy_quote','ignore'
+    ])
+    frame = frame.drop_duplicates(subset=['open_time'], keep='last').sort_values('open_time')
+    frame = frame.tail(requested_bars)
+    frame.index = pd.to_datetime(frame.pop('open_time'), unit='ms', utc=True)
+    frame = frame[['Open','High','Low','Close','Volume']].apply(pd.to_numeric, errors='coerce').dropna()
+    if len(frame) < 250:
+        raise RuntimeError(f'Binance REST: عدد الشموع الصالحة {len(frame)} أقل من 250.')
+    return frame
+
+
 def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     if timeframe not in INTERVALS:
         raise RuntimeError(f'فريم غير مدعوم: {timeframe}')
@@ -111,6 +157,16 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                         time.sleep(delay)
             if size_index < len(_bar_sizes(requested_bars)) - 1:
                 time.sleep(2.0)
+    # TradingView's anonymous WebSocket can drop repeatedly on Render. BTC has
+    # an independent public REST feed, so recover without changing signal rules.
+    if symbol == 'BINANCE:BTCUSDT':
+        try:
+            df = _fetch_binance_rest(timeframe, requested_bars)
+            with _cache_lock:
+                _cache[cache_key] = (time.time(), df.copy())
+            return df
+        except Exception as exc:
+            errors.append(f'Binance REST fallback: {type(exc).__name__}: {exc}')
     raise RuntimeError(f'تعذر جلب بيانات السوق {symbol} بعد التدرج في حجم البيانات. ' + ' | '.join(errors))
 
 
