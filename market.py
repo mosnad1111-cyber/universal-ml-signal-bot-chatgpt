@@ -75,7 +75,7 @@ def _bar_sizes(preferred: int):
 
 
 def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
-    """Fallback BTC/USDT feed using Binance's public REST klines endpoint."""
+    """Fetch BTC/USDT klines from Binance public market-data endpoints with pagination."""
     asset = next((a for a in ASSETS.values() if a['symbol'] == 'BINANCE:BTCUSDT'), None)
     if asset is None:
         raise RuntimeError('إعداد BTC/USDT غير موجود.')
@@ -83,38 +83,58 @@ def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
     remaining = max(250, int(requested_bars))
     end_time = None
     pages = []
+    endpoints = (
+        'https://data-api.binance.vision/api/v3/klines',
+        'https://api.binance.com/api/v3/klines',
+        'https://api1.binance.com/api/v3/klines',
+    )
+    page_count = 0
     while remaining > 0:
         limit = min(1000, remaining)
         params = {'symbol': asset['ticker'], 'interval': interval, 'limit': limit}
         if end_time is not None:
             params['endTime'] = end_time
-        response = requests.get(
-            'https://api.binance.com/api/v3/klines',
-            params=params, timeout=(5, 15),
-            headers={'User-Agent': 'universal-ml-signal-bot/1.0'},
-        )
-        response.raise_for_status()
-        batch = response.json()
-        if not isinstance(batch, list) or not batch:
-            break
+        batch = None
+        endpoint_errors = []
+        for endpoint in endpoints:
+            try:
+                response = requests.get(
+                    endpoint, params=params, timeout=(5, 15),
+                    headers={'User-Agent': 'universal-ml-signal-bot/1.1'},
+                )
+                response.raise_for_status()
+                candidate = response.json()
+                if not isinstance(candidate, list):
+                    raise RuntimeError(f'استجابة Binance غير متوقعة من {endpoint}')
+                if candidate:
+                    batch = candidate
+                    break
+            except Exception as exc:
+                endpoint_errors.append(f'{endpoint}: {type(exc).__name__}: {exc}')
+        if batch is None:
+            raise RuntimeError('تعذر جلب صفحة تاريخية من جميع واجهات Binance: ' + ' | '.join(endpoint_errors))
         pages.extend(batch)
+        page_count += 1
         remaining -= len(batch)
         oldest_open = int(batch[0][0])
         if len(batch) < limit or oldest_open <= 0:
             break
         end_time = oldest_open - 1
     if len(pages) < 250:
-        raise RuntimeError(f'Binance REST أعاد {len(pages)} شمعة فقط.')
+        raise RuntimeError(f'Binance REST أعاد {len(pages)} شمعة فقط عبر {page_count} صفحات.')
     frame = pd.DataFrame(pages, columns=[
         'open_time','Open','High','Low','Close','Volume','close_time',
         'quote_volume','trades','taker_buy_base','taker_buy_quote','ignore'
     ])
     frame = frame.drop_duplicates(subset=['open_time'], keep='last').sort_values('open_time')
-    frame = frame.tail(requested_bars)
     frame.index = pd.to_datetime(frame.pop('open_time'), unit='ms', utc=True)
     frame = frame[['Open','High','Low','Close','Volume']].apply(pd.to_numeric, errors='coerce').dropna()
+    frame = frame.tail(requested_bars)
     if len(frame) < 250:
         raise RuntimeError(f'Binance REST: عدد الشموع الصالحة {len(frame)} أقل من 250.')
+    print(f'[market] Binance REST BTC {timeframe}: requested={requested_bars}, received={len(frame)}, pages={page_count}, first={frame.index[0].isoformat()}, last={frame.index[-1].isoformat()}')
+    if len(frame) < requested_bars:
+        print(f'[market] WARNING BTC history partial on Binance REST: requested={requested_bars}, received={len(frame)}')
     return frame
 
 
