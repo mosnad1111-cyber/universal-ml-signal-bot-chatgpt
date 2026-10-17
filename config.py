@@ -34,7 +34,8 @@ BACKTEST_BARS_5M=int(os.getenv('BACKTEST_BARS_5M','10000'))
 BACKTEST_BARS_15M=int(os.getenv('BACKTEST_BARS_15M',str(BACKTEST_BARS)))
 BACKTEST_BARS_30M=int(os.getenv('BACKTEST_BARS_30M',str(BACKTEST_BARS)))
 BACKTEST_BARS_1H=int(os.getenv('BACKTEST_BARS_1H','10000'))
-BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','500'))
+# Retrain every 1000 candles by default: fewer costly fits while preserving strict chronological walk-forward splits.
+BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','1000'))
 def thresholds_for(tf):
     if tf == '5m': return MIN_SCORE_5M, MIN_AI_PROB_5M
     if tf == '15m': return MIN_SCORE_15M, MIN_AI_PROB_15M
