@@ -96,7 +96,7 @@ class GoldAI:
     def __init__(self):
         self.models = {}; self.metrics = {}; self.trained_at = {}; self.errors = {}
 
-    def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15):
+    def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15, fast_mode=False):
         x = raw_df.copy()
         horizons = {'5m': 36, '15m': 24, '1h': 18}
         # Labels must observe the same maximum lifetime as live trades/backtests.
@@ -144,6 +144,39 @@ class GoldAI:
         Xtr=train[FEATURES]; ytr=train['_label']; Xv=val[FEATURES]; yv=val['_label']
         if len(Xtr)<600 or len(Xv)<40 or ytr.nunique()<2 or yv.nunique()<2:
             self.errors[timeframe]=f'invalid_class_distribution:train={len(Xtr)} val={len(Xv)}'; return False
+
+        # Walk-forward backtests only need the final deployment model for each
+        # fold. Skip the separate validation fit/metrics fit and train once on
+        # the exact same purged train+validation rows used by the normal final
+        # refit below. This roughly halves model-fitting work without reducing
+        # tree count or changing the feature/label/risk definitions.
+        if fast_mode:
+            all_labeled = pd.concat([train, val]).sort_index(kind='stable')
+            Xall = all_labeled[FEATURES]
+            yall = all_labeled['_label']
+            try:
+                from xgboost import XGBClassifier
+                model = XGBClassifier(n_estimators=350,max_depth=4,learning_rate=0.035,subsample=0.85,colsample_bytree=0.85,min_child_weight=6,reg_alpha=0.15,reg_lambda=2.0,objective='binary:logistic',eval_metric='logloss',tree_method='hist',random_state=42,n_jobs=1)
+                model.fit(Xall, yall)
+                engine = 'XGBoost'
+            except Exception as exc:
+                self.errors[timeframe]=f'XGBoost: {type(exc).__name__}: {exc}'
+                model=HistGradientBoostingClassifier(max_iter=250,learning_rate=0.045,max_leaf_nodes=15,l2_regularization=1.0,random_state=42)
+                model.fit(Xall, yall)
+                engine='HistGradientBoosting'
+            metrics = {
+                'engine': engine, 'training_rows': int(len(Xall)),
+                'deployment_training_rows': int(len(Xall)),
+                'training_candles': int(len(set(all_labeled.index))),
+                'deployment_training_candles': int(len(set(all_labeled.index))),
+                'fast_mode': True,
+            }
+            if hasattr(model, 'feature_importances_'):
+                imp=np.asarray(model.feature_importances_,dtype=float)
+                metrics['top_features']=[{'feature':k,'importance':float(v)} for k,v in sorted(zip(FEATURES,imp),key=lambda z:z[1],reverse=True)[:10]]
+            self.models[timeframe]=model; self.metrics[timeframe]=metrics
+            self.trained_at[timeframe]=time.time(); self.errors.pop(timeframe,None); return True
+
         try:
             from xgboost import XGBClassifier
             model=XGBClassifier(n_estimators=350,max_depth=4,learning_rate=0.035,subsample=0.85,colsample_bytree=0.85,min_child_weight=6,reg_alpha=0.15,reg_lambda=2.0,objective='binary:logistic',eval_metric='logloss',tree_method='hist',random_state=42,n_jobs=1)
