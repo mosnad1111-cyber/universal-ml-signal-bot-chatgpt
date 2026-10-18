@@ -31,3 +31,21 @@ def home():
 @app.get('/health')
 def health():
     return jsonify({'status': 'ok', 'active_thresholds': active_thresholds()})
+
+@app.get('/diagnostics')
+def diagnostics():
+    return jsonify({
+        'status': 'ok',
+        'active_thresholds': active_thresholds(),
+        'scans': {
+            key: {
+                'scan_count': engine.scan_counts.get(key, 0),
+                'reject_counts': engine.reject_counts.get(key, {}),
+                'last': engine.last_diagnostics.get(key, {}),
+                'last_scan_at': engine.last_scan_at.get(key, 0),
+                'model_training_ok': engine.model_training_ok.get(key),
+                'model_errors': engine.ai[key.split('|', 1)[0]].errors,
+            }
+            for key in engine.last_diagnostics
+        }
+    })
