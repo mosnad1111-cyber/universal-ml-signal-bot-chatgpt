@@ -12,8 +12,27 @@ APP_STARTED_AT=time.time()
 db=DB(DB_PATH)
 tg=Telegram(db)
 engine=Engine(tg.send)
-tg.start(engine)
-engine.start()
+
+# Start background workers in the serving worker, not at module import time.
+# This remains safe if the WSGI server imports the app before forking workers.
+_background_start_lock = threading.Lock()
+_background_started_pid = None
+
+@app.before_request
+def ensure_background_services():
+    global _background_started_pid
+    pid = os.getpid()
+    if _background_started_pid == pid:
+        return
+    with _background_start_lock:
+        if _background_started_pid == pid:
+            return
+        # Mark this process before starting threads to prevent duplicate starts
+        # if startup overlaps with another request.
+        _background_started_pid = pid
+        print(f"[startup] starting Telegram polling and engine workers in pid={pid}", flush=True)
+        tg.start(engine)
+        engine.start()
 
 def active_thresholds():
     return {
