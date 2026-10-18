@@ -218,10 +218,25 @@ class Engine:
                 for symbol in self.ai:
                     for tf in TIMEFRAMES:
                         try:
-                            self.scan(tf,symbol); self._record_scan_outcome(tf,symbol)
-                        except Exception:
-                            self._record_scan_outcome(tf,symbol); traceback.print_exc()
-            except Exception: traceback.print_exc()
+                            result = self.scan(tf,symbol)
+                            self._record_scan_outcome(tf,symbol)
+                            d = self.last_diagnostics.get(f'{symbol}|{tf}', {})
+                            print(
+                                f"[scan] {symbol} {tf}: "
+                                f"result={'SENT' if result else 'NO_SIGNAL'} "
+                                f"model_ready={d.get('model_ready')} "
+                                f"bars={d.get('raw_bars','-')} "
+                                f"candle={d.get('candle_time','-')} "
+                                f"buy_ai={d.get('buy_ai','-')} sell_ai={d.get('sell_ai','-')} "
+                                f"buy_score={d.get('buy_score','-')} sell_score={d.get('sell_score','-')} "
+                                f"reject={d.get('reject','-')}"
+                            )
+                        except Exception as exc:
+                            self._record_scan_outcome(tf,symbol)
+                            print(f"[scan] ERROR {symbol} {tf}: {type(exc).__name__}: {exc}")
+                            traceback.print_exc()
+            except Exception:
+                traceback.print_exc()
             time.sleep(SCAN_SECONDS)
 
     def stats_text(self):
