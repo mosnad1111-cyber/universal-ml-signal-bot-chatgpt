@@ -15,11 +15,11 @@ SCAN_SECONDS=int(os.getenv('SCAN_SECONDS','60')); MONITOR_SECONDS=int(os.getenv(
 RR=float(os.getenv('RR','2.0')); PIVOT_LEN=int(os.getenv('PIVOT_LEN','5')); DIVISOR=float(os.getenv('DIVISOR','3.6'))
 ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_ATR_MULT','1.15'))
 MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_AI_PROB','0.50'))
-MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','60')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.60'))
-MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','65')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.45'))
-MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','60')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.45'))
-DISABLE_15M_SIGNALS=os.getenv('DISABLE_15M_SIGNALS','true').strip().lower() in ('1','true','yes','on')
-DISABLE_1H_SELL_SIGNALS=os.getenv('DISABLE_1H_SELL_SIGNALS','true').strip().lower() in ('1','true','yes','on')
+MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','60')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.30'))
+MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','65')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.30'))
+MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','60')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.35'))
+DISABLE_15M_SIGNALS=os.getenv('DISABLE_15M_SIGNALS','false').strip().lower() in ('1','true','yes','on')
+DISABLE_1H_SELL_SIGNALS=os.getenv('DISABLE_1H_SELL_SIGNALS','false').strip().lower() in ('1','true','yes','on')
 def signal_direction_allowed(tf, direction):
     if tf == '15m' and DISABLE_15M_SIGNALS:
         return False
