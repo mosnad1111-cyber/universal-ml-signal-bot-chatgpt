@@ -613,7 +613,7 @@ class GoldBacktest:
                 lines.append('🧪 ملاحظة: إشارات 15m معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
             if restrictions.get('1h_sell_disabled'):
                 lines.append('🧪 ملاحظة: إشارات SELL على 1h معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)} (معطل)',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات لم تصل للدخول قبل نهاية البيانات: {r.get("expired_unfilled",0)}',f'🟠 TP في شمعة التفعيل (ملتبس وحُسب -1R تحفظيًا): {r.get("ambiguous_entry_candle",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)} (معطل)',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟠 TP في شمعة التفعيل (ملتبس وحُسب -1R تحفظيًا): {r.get("ambiguous_entry_candle",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])
@@ -625,7 +625,7 @@ class GoldBacktest:
                 lines.append('🔎 تفاصيل صفقات 15m (للتشخيص فقط):')
                 for t in r['trades_detail'][-12:]:
                     stamp = pd.Timestamp(t['time']).strftime('%m-%d %H:%M')
-                    result_label = 'TP' if t['result'] == 'TP' else ('SL' if t['result'] == 'SL' else ('ملتبس' if t['result'] == 'AMBIGUOUS_ENTRY_CANDLE' else 'مهلة'))
+                    result_label = 'TP' if t['result'] == 'TP' else ('SL' if t['result'] == 'SL' else ('ملتبس' if t['result'] == 'AMBIGUOUS_ENTRY_CANDLE' else 'غير محسومة'))
                     lines.append(f"   {stamp} {t['direction']} | Score {t['score']:.0f} | AI {t['ai']*100:.0f}% | Entry {t.get('entry',0):.2f} | {result_label} | {t['r']:+.2f}R")
             lines.append('')
         gross_profit = sum(float(results.get(tf, {}).get('gross_profit_r', sum(max(t.get('r', 0), 0) for t in results.get(tf, {}).get('trades_detail', []))) or 0.0) for tf in TIMEFRAMES)
