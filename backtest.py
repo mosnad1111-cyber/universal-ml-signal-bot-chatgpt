@@ -84,26 +84,20 @@ class GoldBacktest:
         return {'trend': 0}
 
     def _resolve(self, df, start, setup):
-        """Resolve a signal with finite pending and total-lifetime limits."""
+        """Resolve only on Entry then SL/TP; never synthesize a time-based exit."""
         d = setup['direction']
         entry = float(setup['entry'])
         sl = float(setup['sl'])
         tp = float(setup['tp'])
-        pending_ttl = max(1, int(SIGNAL_PENDING_TTL_BARS))
-        max_lifetime = max(pending_ttl + 1, int(SIGNAL_MAX_LIFETIME_BARS))
-        signal_bar = max(0, int(start) - 1)
         active = False
         act_j = None
         for j in range(start, len(df)):
-            age = j - signal_bar
             hi, lo = float(df['High'].iloc[j]), float(df['Low'].iloc[j])
             if not active:
                 if lo <= entry <= hi:
                     active = True
                     act_j = j
                 else:
-                    if age >= pending_ttl:
-                        return 'EXPIRED_UNFILLED', j, None
                     continue
             hit_sl, hit_tp = ((lo <= sl, hi >= tp) if d == 'BUY' else (hi >= sl, lo <= tp))
             if hit_sl and hit_tp:
@@ -118,8 +112,6 @@ class GoldBacktest:
                 return 'TP', j, act_j
             if hit_sl:
                 return 'SL', j, act_j
-            if age >= max_lifetime:
-                return 'TIMEOUT', j, act_j
         return None, None, act_j
 
     @staticmethod
@@ -391,11 +383,6 @@ class GoldBacktest:
                     live_config_filtered += 1
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
-                if result == 'EXPIRED_UNFILLED':
-                    expired_unfilled += 1
-                    # Match live behavior: no new setup while waiting for entry.
-                    i = max(i + 1, end_j + 1)
-                    continue
                 if result:
                     if result == 'TP':
                         r = float(RR)
@@ -422,10 +409,11 @@ class GoldBacktest:
                         'exit_time': raw.index[end_j].isoformat(),
                         'exit_price': float(raw['Close'].iloc[end_j]) if result in ('TIMEOUT', 'AMBIGUOUS_ENTRY_CANDLE') else (float(setup['tp']) if result == 'TP' else float(setup['sl'])),
                     })
-                    # Skip candles until TP/SL or the explicit timeout.
+                    # Skip candles until a real TP/SL outcome.
                     i = max(i + 1, end_j + 1)
                     continue
-                # The history ended before the configured lifetime could resolve.
+                # Available history ended before Entry/SL/TP resolved; do not
+                # fabricate an expiry or include this incomplete trade in results.
                 unresolved_at_end += 1
                 break
             i += 1
@@ -625,7 +613,7 @@ class GoldBacktest:
                 lines.append('🧪 ملاحظة: إشارات 15m معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
             if restrictions.get('1h_sell_disabled'):
                 lines.append('🧪 ملاحظة: إشارات SELL على 1h معطّلة في التشغيل الحي، لكن هذا الـBacktest يحاكيها لتقييم الاستراتيجية فقط.')
-            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)}',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات انتهت دون تفعيل: {r.get("expired_unfilled",0)}',f'🟠 TP في شمعة التفعيل (ملتبس وحُسب -1R تحفظيًا): {r.get("ambiguous_entry_candle",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
+            lines += [f'📌 الصفقات المحسومة: {n}',f'✅ هدف: {r.get("targets", w)} | ❌ وقف: {r.get("stops", l)} | ⏳ إغلاق بالمهلة: {r.get("timeouts",0)} (معطل)',f'🟢 رابحة حسب R: {r.get("wins",w)} | 🔴 خاسرة حسب R: {r.get("losses",l)}',f'🟡 إشارات لم تصل للدخول قبل نهاية البيانات: {r.get("expired_unfilled",0)}',f'🟠 TP في شمعة التفعيل (ملتبس وحُسب -1R تحفظيًا): {r.get("ambiguous_entry_candle",0)}',f'🛡️ إعدادات مرفوضة بفلتر الاستراتيجية: {r.get("strategy_filtered",0)}',f'⚙️ إعدادات كان التشغيل الحي سيمنعها (لكن حاكاها الاختبار): {r.get("live_config_filtered",0)}',f'⚠️ إشارات غير محسومة عند نهاية البيانات: {r.get("unresolved_at_end",0)}',f'🎯 الفوز: {r.get("win_rate",0):.1f}%',f'⚖️ صافي: {r.get("net_r",0):+.1f}R',f'📊 متوسط Score: {r.get("avg_score",0):.1f}',f'💰 Profit Factor: {pf}',f'📉 Max Drawdown: {r.get("max_drawdown_r",0):.1f}R',f'📐 Expectancy: {r.get("expectancy_r",0):+.2f}R/صفقة','↔️ <b>شراء/بيع:</b>']
             lines += GoldBacktest._fmt_groups(r.get('direction',[]),['BUY','SELL'])
             lines += ['📊 <b>حسب Score:</b>'] + GoldBacktest._fmt_groups(r.get('score_bands',[]),['<60','60-64','65-69','70-74','75-79','80+'])
             lines += ['🧠 <b>حسب تقدير AI:</b>'] + GoldBacktest._fmt_groups(r.get('ai_bands',[]),['أقل من 30%','30-39%','40-49%','50-59%','60%+'])

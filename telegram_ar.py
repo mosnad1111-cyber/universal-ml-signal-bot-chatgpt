@@ -160,7 +160,7 @@ class Telegram:
                                 for s in rows:
                                     icon='🟢' if s['direction']=='BUY' else '🔴'; asset=next((a for a in ASSETS.values() if a['symbol']==s['symbol']), {'label':s['symbol']}); lines.append(f'{asset["label"]} | {icon} {s["timeframe"]} | {s["direction"]} | {s["status"]} | {s["result"] or "—"}')
                                 self.send('\n'.join(lines),cid)
-                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب: TVC:GOLD\n₿ البيتكوين: BINANCE:BTCUSDT\n⏱️ 5m / 15m / 1H لكل أصل\n🤖 نموذج AI مستقل لكل أصل وفريم\n📡 مراقبة الدخول وSL/TP مفعلة',cid)
+                        elif data=='status': self.send('🟢 <b>البوت يعمل</b>\n\n🥇 الذهب: TVC:GOLD\n₿ البيتكوين: BINANCE:BTCUSDT\n⏱️ 5m / 15m / 1H لكل أصل\n🤖 نموذج AI مستقل لكل أصل وفريم\n📡 مراقبة الدخول وSL/TP مفعلة\n♾️ لا توجد مهلة زمنية؛ تبقى الإشارة/الصفقة حتى التفعيل ثم SL أو TP',cid)
             except Exception: time.sleep(5)
 
     def start(self,engine):

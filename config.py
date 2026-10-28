@@ -43,5 +43,6 @@ def thresholds_for(tf):
     return MIN_SCORE, MIN_AI_PROB
 GRID_SCORES=(60,65,70,75)
 GRID_AI_PROBS=(0.40,0.45,0.50,0.55,0.60)
-SIGNAL_PENDING_TTL_BARS=int(os.getenv('SIGNAL_PENDING_TTL_BARS','12'))
-SIGNAL_MAX_LIFETIME_BARS=int(os.getenv('SIGNAL_MAX_LIFETIME_BARS','48'))
+# Maximum future observation window used only to create fully resolved ML training labels.
+# This is NOT a live trade expiry: live WAITING/ACTIVE signals remain open until Entry/SL/TP.
+SIGNAL_LABEL_HORIZON_BARS=int(os.getenv('SIGNAL_LABEL_HORIZON_BARS','48'))

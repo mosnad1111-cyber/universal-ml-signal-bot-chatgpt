@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score
-from config import SIGNAL_PENDING_TTL_BARS, SIGNAL_MAX_LIFETIME_BARS
+from config import SIGNAL_LABEL_HORIZON_BARS
 
 warnings.filterwarnings('ignore')
 
@@ -38,7 +38,6 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
     if not np.isfinite(divisor) or divisor <= 0 or not np.isfinite(sl_atr_mult) or sl_atr_mult <= 0:
         raise ValueError("divisor and sl_atr_mult must be positive finite numbers")
 
-    pending_ttl = max(1, int(SIGNAL_PENDING_TTL_BARS))
     for i in range(max(0, len(x) - horizon)):
         if not all(np.isfinite(v) for v in (close[i], atr[i], high20[i], low20[i])) or atr[i] <= 0:
             continue
@@ -66,10 +65,8 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
         for j in range(i + 1, min(len(x), i + horizon + 1)):
             if not active:
                 if not (low[j] <= entry <= high[j]):
-                    # A signal that never reaches Entry within the live pending
-                    # window is not a valid training example.
-                    if j - i >= pending_ttl:
-                        break
+                    # Pending setups do not expire in live trading. Keep looking
+                    # within the label observation window for a real Entry touch.
                     continue
                 active = True
                 activation_j = j
@@ -99,9 +96,9 @@ class GoldAI:
     def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15, fast_mode=False):
         x = raw_df.copy()
         horizons = {'5m': 36, '15m': 24, '1h': 18}
-        # Labels must observe the same maximum lifetime as live trades/backtests.
-        # Keep the prior timeframe minimums, but never truncate before live expiry.
-        horizon = max(horizons.get(timeframe, 24), max(1, int(SIGNAL_MAX_LIFETIME_BARS)))
+        # This finite horizon is only the training-label observation window.
+        # Unresolved examples stay unlabeled; live trades do not expire by time.
+        horizon = max(horizons.get(timeframe, 24), max(1, int(SIGNAL_LABEL_HORIZON_BARS)))
         labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult) for d in (1, 0)}
         base = x[FEATURES[:-1]].copy()
         base_valid = base.notna().all(axis=1)
