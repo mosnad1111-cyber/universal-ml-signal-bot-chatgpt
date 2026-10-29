@@ -18,7 +18,7 @@ class StrategyLabTests(unittest.TestCase):
             {"time": "2026-01-03T00:00:00+00:00", "exit_time": "2026-01-04T00:00:00+00:00", "r": -1.0},
             {"time": "2026-01-01T00:00:00+00:00", "exit_time": "2026-01-01T12:00:00+00:00", "r": -1.0},
         ]
-        midpoint = "2026-01-02T00:00:00+00:00"
+        midpoint = "2026-01-01T18:00:00+00:00"
         from pandas import Timestamp
         calibration, holdout = split_completed_trades(trades, Timestamp(midpoint))
         self.assertEqual(len(calibration), 1)
