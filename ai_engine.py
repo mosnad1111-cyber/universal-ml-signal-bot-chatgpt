@@ -21,7 +21,7 @@ CONTEXT_FEATURES = [
 FEATURES = BASE_FEATURES + CONTEXT_FEATURES + ['direction']
 
 
-def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.15):
+def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.15, strategy='baseline', timeframe=None):
     """Label the outcome of the same entry/SL/TP geometry used by live build_setup.
 
     The label is attached to the signal candle. Entry activation and exits are
@@ -43,16 +43,60 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
             continue
 
         span = max(high20[i] - low20[i], atr[i])
-        if direction == 1:
-            entry = max(close[i], low20[i] + span / divisor)
-            stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i])
-            risk = entry - stop
-            target = entry + rr * risk
+        # Baseline geometry does not depend on these indicators; default them only
+        # for lightweight callers/tests that provide OHLC plus ATR/range columns.
+        ema20 = float(x['ema20'].iloc[i]) if 'ema20' in x else float(close[i])
+        ema50 = float(x['ema50'].iloc[i]) if 'ema50' in x else float(close[i])
+        ema200 = float(x['ema200'].iloc[i]) if 'ema200' in x else float(close[i])
+        rsi = float(x['rsi'].iloc[i]) if 'rsi' in x else 50.0
+        macd_hist = float(x['macd_hist'].iloc[i]) if 'macd_hist' in x else 0.0
+        is_buy = direction == 1
+        # Match the higher-timeframe direction filter used by live/backtest setup selection.
+        ctx15 = float(x['ctx15_trend'].iloc[i]) if 'ctx15_trend' in x else 0.0
+        ctx1h = float(x['ctx1h_trend'].iloc[i]) if 'ctx1h_trend' in x else 0.0
+        context_trend = 1 if timeframe == '5m' and ctx15 > 0 and ctx1h > 0 else (
+            -1 if timeframe == '5m' and ctx15 < 0 and ctx1h < 0 else (
+                ctx1h if timeframe == '15m' else 0
+            )
+        )
+        # Preserve baseline training exactly for a fair comparison with the live model.
+        # The new strategy hypotheses incorporate this filter in both labels and setup selection.
+        if strategy != 'baseline':
+            if context_trend > 0 and not is_buy:
+                continue
+            if context_trend < 0 and is_buy:
+                continue
+        if strategy == 'baseline':
+            if is_buy:
+                entry = max(close[i], low20[i] + span / divisor)
+                stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i])
+            else:
+                entry = min(close[i], high20[i] - span / divisor)
+                stop = max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
+        elif strategy == 'trend_pullback':
+            aligned = (ema20 > ema50 > ema200) if is_buy else (ema20 < ema50 < ema200)
+            rsi_ok = (45 <= rsi <= 62) if is_buy else (38 <= rsi <= 55)
+            if not aligned or not rsi_ok or abs(close[i] - ema20) > 0.75 * atr[i]:
+                continue
+            entry = ema20
+            stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i]) if is_buy else max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
+        elif strategy == 'breakout_retest':
+            is_breakout = close[i] > high20[i] if is_buy else close[i] < low20[i]
+            if not is_breakout:
+                continue
+            entry = high20[i] if is_buy else low20[i]
+            stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i]) if is_buy else max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
+        elif strategy == 'momentum_continuation':
+            aligned = (ema20 > ema50 > ema200) if is_buy else (ema20 < ema50 < ema200)
+            momentum_ok = (rsi >= 55 and macd_hist > 0) if is_buy else (rsi <= 45 and macd_hist < 0)
+            if not aligned or not momentum_ok:
+                continue
+            entry = close[i]
+            stop = entry - sl_atr_mult * atr[i] if is_buy else entry + sl_atr_mult * atr[i]
         else:
-            entry = min(close[i], high20[i] - span / divisor)
-            stop = max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
-            risk = stop - entry
-            target = entry - rr * risk
+            raise ValueError(f'Unknown strategy: {strategy}')
+        risk = entry - stop if is_buy else stop - entry
+        target = entry + rr * risk if is_buy else entry - rr * risk
 
         risk_atr = risk / atr[i]
         # Match the live setup's risk sanity filter; non-tradable geometries
@@ -93,13 +137,13 @@ class GoldAI:
     def __init__(self):
         self.models = {}; self.metrics = {}; self.trained_at = {}; self.errors = {}
 
-    def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15, fast_mode=False):
+    def fit(self, timeframe, raw_df, rr=2.0, feedback=None, divisor=3.6, sl_atr_mult=1.15, fast_mode=False, strategy='baseline'):
         x = raw_df.copy()
         horizons = {'5m': 36, '15m': 24, '1h': 18}
         # This finite horizon is only the training-label observation window.
         # Unresolved examples stay unlabeled; live trades do not expire by time.
         horizon = max(horizons.get(timeframe, 24), max(1, int(SIGNAL_LABEL_HORIZON_BARS)))
-        labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult) for d in (1, 0)}
+        labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult, strategy, timeframe) for d in (1, 0)}
         base = x[FEATURES[:-1]].copy()
         base_valid = base.notna().all(axis=1)
 

@@ -72,7 +72,7 @@ def _score_direction(r, direction, ai_prob, ctx):
 
 
 def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
-                min_score=65, min_ai=0.50, context=None, diagnostics=None, min_gap=7.0):
+                min_score=65, min_ai=0.50, context=None, diagnostics=None, min_gap=7.0, strategy='baseline'):
     diagnostics = diagnostics if diagnostics is not None else {}
     if len(df) < 220:
         diagnostics['reject'] = 'insufficient_bars'; return None
@@ -88,6 +88,25 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         prob = probs.get(direction)
         if prob is None or not math.isfinite(float(prob)):
             diagnostics[f'{direction.lower()}_reject'] = 'no_model_probability'; continue
+        ema20, ema50, ema200 = float(r['ema20']), float(r['ema50']), float(r['ema200'])
+        rsi, macd_hist = float(r['rsi']), float(r['macd_hist'])
+        close = float(r['Close']); atr = float(r['atr'])
+        is_buy = direction == 'BUY'
+        aligned = (ema20 > ema50 > ema200) if is_buy else (ema20 < ema50 < ema200)
+        if strategy == 'trend_pullback':
+            rsi_ok = (45 <= rsi <= 62) if is_buy else (38 <= rsi <= 55)
+            if not aligned or not rsi_ok or abs(close - ema20) > 0.75 * atr:
+                diagnostics[f'{direction.lower()}_reject'] = 'not_trend_pullback'; continue
+        elif strategy == 'breakout_retest':
+            is_breakout = close > float(r['high20']) if is_buy else close < float(r['low20'])
+            if not is_breakout:
+                diagnostics[f'{direction.lower()}_reject'] = 'not_breakout'; continue
+        elif strategy == 'momentum_continuation':
+            momentum_ok = (rsi >= 55 and macd_hist > 0) if is_buy else (rsi <= 45 and macd_hist < 0)
+            if not aligned or not momentum_ok:
+                diagnostics[f'{direction.lower()}_reject'] = 'momentum_not_aligned'; continue
+        elif strategy != 'baseline':
+            raise ValueError(f'Unknown strategy: {strategy}')
         prob = _clip01(prob); score = _score_direction(r, direction, prob, context)
         diagnostics[f'{direction.lower()}_ai'] = round(prob, 4)
         diagnostics[f'{direction.lower()}_score'] = round(score, 1)
@@ -117,10 +136,21 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         diagnostics['reject'] = 'against_higher_timeframe_trend'; diagnostics['context_trend'] = context_trend; return None
 
     hi = float(r['high20']); lo = float(r['low20']); span = max(hi - lo, atr)
-    if direction == 'BUY':
-        entry = max(close, lo + span / divisor); sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr); tp = entry + rr * (entry - sl)
-    else:
-        entry = min(close, hi - span / divisor); sl = max(hi + 0.10 * atr, entry + sl_atr_mult * atr); tp = entry - rr * (sl - entry)
+    if strategy == 'baseline':
+        if direction == 'BUY':
+            entry = max(close, lo + span / divisor); sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr)
+        else:
+            entry = min(close, hi - span / divisor); sl = max(hi + 0.10 * atr, entry + sl_atr_mult * atr)
+    elif strategy == 'trend_pullback':
+        entry = ema20
+        sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr) if direction == 'BUY' else max(hi + 0.10 * atr, entry + sl_atr_mult * atr)
+    elif strategy == 'breakout_retest':
+        entry = hi if direction == 'BUY' else lo
+        sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr) if direction == 'BUY' else max(hi + 0.10 * atr, entry + sl_atr_mult * atr)
+    else:  # momentum_continuation
+        entry = close
+        sl = entry - sl_atr_mult * atr if direction == 'BUY' else entry + sl_atr_mult * atr
+    tp = entry + rr * (entry - sl) if direction == 'BUY' else entry - rr * (sl - entry)
 
     risk = abs(entry - sl); risk_atr = risk / atr if atr else float('inf'); diagnostics['risk_atr'] = round(risk_atr, 3)
     if risk < 0.55 * atr or risk > 3.0 * atr:

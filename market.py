@@ -3,7 +3,10 @@ import warnings
 import threading
 import numpy as np
 import pandas as pd
-import requests
+try:
+    import requests
+except ImportError:  # Keep feature/backtest tests importable in minimal test environments.
+    requests = None
 
 warnings.filterwarnings('ignore')
 
@@ -76,6 +79,8 @@ def _bar_sizes(preferred: int):
 
 def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
     """Fetch BTC/USDT klines from Binance public market-data endpoints with pagination."""
+    if requests is None:
+        raise RuntimeError("The requests package is required for Binance REST data.")
     asset = next((a for a in ASSETS.values() if a['symbol'] == 'BINANCE:BTCUSDT'), None)
     if asset is None:
         raise RuntimeError('إعداد BTC/USDT غير موجود.')

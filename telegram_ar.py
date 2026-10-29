@@ -3,6 +3,7 @@ import threading
 import requests
 from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
+from strategy_lab import StrategyResearchLab, STRATEGY_NAMES
 
 class Telegram:
     def __init__(self, db=None):
@@ -50,6 +51,7 @@ class Telegram:
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
+            [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
@@ -117,6 +119,32 @@ class Telegram:
                 self.backtest_running=False
         threading.Thread(target=work,daemon=True).start()
 
+    def _strategy_lab(self, cid, asset_key='GOLD'):
+        if self.backtest_running:
+            self.send('⏳ يوجد اختبار يعمل حاليًا. انتظر اكتماله قبل تشغيل مختبر الاستراتيجيات.', cid)
+            return
+        self.backtest_running = True
+        asset = ASSETS.get(asset_key, ASSETS['GOLD'])
+        self.send(
+            f'🧭 <b>بدأ مختبر الاستراتيجيات — {asset["label"]}</b>\n\n'
+            'سيُختبر النموذج الحالي وثلاث فرضيات دخول جديدة على 5m و15m و1h. '
+            'كل استراتيجية تتعلم تسميات خاصة بها.\n'
+            'لن تتغير إشارات البوت الحية أثناء الاختبار. قد يستغرق العمل عدة دقائق.',
+            cid,
+        )
+        def work():
+            try:
+                lab = StrategyResearchLab()
+                def progress(tf, strategy):
+                    self.send(f'🔬 <b>{asset["label"]} | {tf}</b>\nالاستراتيجية: {STRATEGY_NAMES.get(strategy, strategy)}', cid)
+                report = lab.run_asset(asset['symbol'], progress=progress)
+                self.send_long(lab.format_ar(report), cid)
+            except Exception as exc:
+                self.send(f'❌ تعذر إكمال مختبر الاستراتيجيات: {type(exc).__name__}: {exc}', cid)
+            finally:
+                self.backtest_running = False
+        threading.Thread(target=work, daemon=True).start()
+
     def poll(self):
         if not self.base: print('ERROR: TELEGRAM_BOT_TOKEN غير موجود'); return
         while True:
@@ -152,6 +180,9 @@ class Telegram:
                             asset_key=data.split(':',1)[1] if ':' in data else 'GOLD'
                             self._backtest(cid,asset_key)
                         elif data=='grid': self._grid_search(cid)
+                        elif data.startswith('lab:'):
+                            asset_key = data.split(':', 1)[1].upper()
+                            self._strategy_lab(cid, asset_key)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
