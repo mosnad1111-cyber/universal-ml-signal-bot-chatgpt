@@ -22,7 +22,7 @@ class GridSnapshotTests(unittest.TestCase):
         predictions = {700: {"BUY": 0.7, "SELL": 0.3}}
 
         def fake_run(tf, bars=None, retrain_every=None, min_score_override=None,
-                     min_ai_override=None, _prepared=None, _predictions=None):
+                     min_ai_override=None, _prepared=None, _predictions=None, symbol=None, **kwargs):
             seen.append((_prepared, _predictions, min_score_override, min_ai_override))
             score = float(min_score_override if min_score_override is not None else 65)
             ai = float(min_ai_override if min_ai_override is not None else 0.50)
@@ -87,11 +87,11 @@ class GridSnapshotTests(unittest.TestCase):
 
         with patch("backtest.fetch", return_value=frame), patch("backtest.add_features", side_effect=lambda df: df):
             first_bt = GoldBacktest()
-            first_bt._enrich = lambda tf, df: df
+            first_bt._enrich = lambda tf, df, symbol=None: df
             first = first_bt._prepare("1h", 321)
 
             second_bt = GoldBacktest()
-            second_bt._enrich = lambda tf, df: df
+            second_bt._enrich = lambda tf, df, symbol=None: df
             second = second_bt._prepare("1h", 321)
 
         self.assertFalse(first["snapshot_reused"])
