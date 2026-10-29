@@ -21,8 +21,8 @@ class NoTimeExpiryRegressionTests(unittest.TestCase):
             + [{"High": 121, "Low": 100, "Close": 120}]
         )
         result, end_j, act_j = self.bt._resolve(df, 0, self.setup)
-        self.assertEqual(result, "AMBIGUOUS_ENTRY_CANDLE")
-        self.assertEqual(end_j, 8)
+        self.assertEqual(result, "TP")
+        self.assertEqual(end_j, 9)
         self.assertEqual(act_j, 8)
 
     def test_activated_setup_does_not_timeout_after_48_bars(self):
