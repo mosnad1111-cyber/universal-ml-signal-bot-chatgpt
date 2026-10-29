@@ -126,9 +126,9 @@ class Telegram:
         self.backtest_running = True
         asset = ASSETS.get(asset_key, ASSETS['GOLD'])
         self.send(
-            f'🧭 <b>بدأ مختبر الاستراتيجيات — {asset["label"]}</b>\\n\\n'
+            f'🧭 <b>بدأ مختبر الاستراتيجيات — {asset["label"]}</b>\n\n'
             'سيُختبر النموذج الحالي وثلاث فرضيات دخول جديدة على 5m و15m و1h. '
-            'كل استراتيجية تتعلم تسميات خاصة بها.\\n'
+            'كل استراتيجية تتعلم تسميات خاصة بها.\n'
             'لن تتغير إشارات البوت الحية أثناء الاختبار. قد يستغرق العمل عدة دقائق.',
             cid,
         )
@@ -136,7 +136,7 @@ class Telegram:
             try:
                 lab = StrategyResearchLab()
                 def progress(tf, strategy):
-                    self.send(f'🔬 <b>{asset["label"]} | {tf}</b>\\nالاستراتيجية: {STRATEGY_NAMES.get(strategy, strategy)}', cid)
+                    self.send(f'🔬 <b>{asset["label"]} | {tf}</b>\nالاستراتيجية: {STRATEGY_NAMES.get(strategy, strategy)}', cid)
                 report = lab.run_asset(asset['symbol'], progress=progress)
                 self.send_long(lab.format_ar(report), cid)
             except Exception as exc:
