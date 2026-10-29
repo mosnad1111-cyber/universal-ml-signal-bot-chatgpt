@@ -98,7 +98,8 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
             if not aligned or not rsi_ok or abs(close - ema20) > 0.75 * atr:
                 diagnostics[f'{direction.lower()}_reject'] = 'not_trend_pullback'; continue
         elif strategy == 'breakout_retest':
-            if (close <= float(r['high20'])) if is_buy else (close >= float(r['low20'])):
+            is_breakout = close > float(r['high20']) if is_buy else close < float(r['low20'])
+            if not is_breakout:
                 diagnostics[f'{direction.lower()}_reject'] = 'not_breakout'; continue
         elif strategy == 'momentum_continuation':
             momentum_ok = (rsi >= 55 and macd_hist > 0) if is_buy else (rsi <= 45 and macd_hist < 0)
