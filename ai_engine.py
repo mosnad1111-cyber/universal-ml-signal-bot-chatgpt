@@ -21,7 +21,7 @@ CONTEXT_FEATURES = [
 FEATURES = BASE_FEATURES + CONTEXT_FEATURES + ['direction']
 
 
-def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.15, strategy='baseline'):
+def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.15, strategy='baseline', timeframe=None):
     """Label the outcome of the same entry/SL/TP geometry used by live build_setup.
 
     The label is attached to the signal candle. Entry activation and exits are
@@ -49,6 +49,18 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
         rsi = float(x['rsi'].iloc[i])
         macd_hist = float(x['macd_hist'].iloc[i])
         is_buy = direction == 1
+        # Match the higher-timeframe direction filter used by live/backtest setup selection.
+        ctx15 = float(x['ctx15_trend'].iloc[i]) if 'ctx15_trend' in x else 0.0
+        ctx1h = float(x['ctx1h_trend'].iloc[i]) if 'ctx1h_trend' in x else 0.0
+        context_trend = 1 if timeframe == '5m' and ctx15 > 0 and ctx1h > 0 else (
+            -1 if timeframe == '5m' and ctx15 < 0 and ctx1h < 0 else (
+                ctx1h if timeframe == '15m' else 0
+            )
+        )
+        if context_trend > 0 and not is_buy:
+            continue
+        if context_trend < 0 and is_buy:
+            continue
         if strategy == 'baseline':
             if is_buy:
                 entry = max(close[i], low20[i] + span / divisor)
@@ -126,7 +138,7 @@ class GoldAI:
         # This finite horizon is only the training-label observation window.
         # Unresolved examples stay unlabeled; live trades do not expire by time.
         horizon = max(horizons.get(timeframe, 24), max(1, int(SIGNAL_LABEL_HORIZON_BARS)))
-        labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult, strategy) for d in (1, 0)}
+        labels = {d: _label_direction(x, d, horizon, rr, divisor, sl_atr_mult, strategy, timeframe) for d in (1, 0)}
         base = x[FEATURES[:-1]].copy()
         base_valid = base.notna().all(axis=1)
 
