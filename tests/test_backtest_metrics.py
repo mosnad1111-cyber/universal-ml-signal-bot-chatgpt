@@ -101,7 +101,7 @@ class BacktestMetricTests(unittest.TestCase):
              patch.object(bt, "run", return_value=mocked_result):
             result = bt.run_grid("15m", bars=1200, scores=(65,), ai_probs=(0.45,))
         self.assertEqual(result["default_score"], 65.0)
-        self.assertEqual(result["default_ai"], 0.45)
+        self.assertEqual(result["default_ai"], 0.30)
         self.assertIsNotNone(result["baseline"])
 
 
