@@ -1,6 +1,7 @@
 import time
 import traceback
 import threading
+from collections import Counter
 import numpy as np
 import pandas as pd
 from config import *
@@ -378,6 +379,10 @@ class GoldBacktest:
         unresolved_at_end = 0
         strategy_filtered = 0
         live_config_filtered = 0
+        setup_candidates = 0
+        unfilled_setups = 0
+        rejection_counts = Counter()
+        direction_rejections = Counter()
         i = warmup
         while i < len(x) - 1:
             probs = predictions.get(i)
@@ -386,9 +391,18 @@ class GoldBacktest:
                 continue
             row = x.iloc[i]
             prefix = pd.concat([x.iloc[:i+1].copy(), row.to_frame().T], axis=0)
+            setup_diagnostics = {}
             setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT,
-                                min_score, min_ai, self._context(tf, row.name, x), strategy=strategy)
+                                min_score, min_ai, self._context(tf, row.name, x),
+                                diagnostics=setup_diagnostics, strategy=strategy)
+            reason = setup_diagnostics.get('reject')
+            if reason:
+                rejection_counts[str(reason)] += 1
+            for key, value in setup_diagnostics.items():
+                if key.endswith('_reject') and value:
+                    direction_rejections[f"{key}:{value}"] += 1
             if setup:
+                setup_candidates += 1
                 # Backtest evaluates the strategy independently of live signal
                 # suppression switches. Count live-blocked setups for diagnostics,
                 # but simulate them so disabled timeframes/directions can be assessed.
@@ -426,8 +440,8 @@ class GoldBacktest:
                     # Skip candles until a real TP/SL outcome.
                     i = max(i + 1, end_j + 1)
                     continue
-                # Available history ended before Entry/SL/TP resolved; do not
-                # fabricate an expiry or include this incomplete trade in results.
+                # Setup passed filters but Entry/SL/TP did not resolve in available history.
+                unfilled_setups += 1
                 unresolved_at_end += 1
                 break
             i += 1
@@ -456,6 +470,10 @@ class GoldBacktest:
             'ambiguous_entry_candle': ambiguous_entry_candle,
             'strategy_filtered': strategy_filtered,
             'live_config_filtered': live_config_filtered,
+            'setup_candidates': setup_candidates,
+            'unfilled_setups': unfilled_setups,
+            'rejection_counts': dict(rejection_counts.most_common()),
+            'direction_rejections': dict(direction_rejections.most_common()),
             'live_config_restrictions': {
                 '15m_disabled': bool(tf == '15m' and DISABLE_15M_SIGNALS),
                 '1h_sell_disabled': bool(tf == '1h' and DISABLE_1H_SELL_SIGNALS),
