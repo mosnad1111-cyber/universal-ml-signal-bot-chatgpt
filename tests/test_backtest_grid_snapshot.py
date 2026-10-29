@@ -45,7 +45,7 @@ class GridSnapshotTests(unittest.TestCase):
             result = bt.run_grid("15m", bars=5000, scores=(60, 65),
                                  ai_probs=(0.40, 0.50))
 
-        prepare.assert_called_once_with("15m", 5000)
+        prepare.assert_called_once_with("15m", 5000, "TVC:GOLD")
         predict.assert_called_once()
         self.assertEqual(len(seen), 5)  # baseline + four threshold combinations
         self.assertTrue(all(snapshot is prepared and pred is predictions
