@@ -317,9 +317,10 @@ class GoldBacktest:
                 model = GoldAI()
                 ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
                                sl_atr_mult=SL_ATR_MULT, fast_mode=True, strategy=strategy)
+                # Avoid re-running an expensive failed fit on every candle.
+                last_fit = i
                 if not ok:
                     continue
-                last_fit = i
             row = x.iloc[i]
             predictions[i] = {
                 'BUY': model.probability(tf, row, 'BUY'),
@@ -353,6 +354,18 @@ class GoldBacktest:
                     'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every, symbol, strategy))
+        if not predictions:
+            return {
+                'timeframe': tf, 'symbol': symbol,
+                'asset_label': next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol),
+                'error': f'no_walk_forward_predictions_for_strategy:{strategy}',
+                'strategy': strategy, 'requested_bars': requested_bars,
+                'raw_bars': prepared.get('received_bars', len(raw)),
+                'completed_bars': len(raw), 'usable_bars': len(x),
+                'history_partial': history_partial, 'snapshot_id': prepared.get('snapshot_id'),
+                'snapshot_start': x.index[0].isoformat() if len(x) else None,
+                'snapshot_end': x.index[-1].isoformat() if len(x) else None,
+            }
         min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
             min_score = float(min_score_override)
