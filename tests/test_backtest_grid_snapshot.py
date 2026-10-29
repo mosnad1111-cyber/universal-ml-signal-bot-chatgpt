@@ -67,9 +67,9 @@ class GridSnapshotTests(unittest.TestCase):
         self.assertEqual(GoldBacktest._requested_bars("15m", 1234), 1234)
 
     def test_live_and_backtest_share_selected_thresholds(self):
-        self.assertEqual(thresholds_for("5m"), (60.0, 0.60))
-        self.assertEqual(thresholds_for("15m"), (65.0, 0.45))
-        self.assertEqual(thresholds_for("1h"), (60.0, 0.45))
+        self.assertEqual(thresholds_for("5m"), (60.0, 0.30))
+        self.assertEqual(thresholds_for("15m"), (65.0, 0.30))
+        self.assertEqual(thresholds_for("1h"), (60.0, 0.35))
 
     def test_prepare_reuses_snapshot_across_backtest_instances(self):
         from backtest import _SNAPSHOT_CACHE, _CACHE_LOCK
