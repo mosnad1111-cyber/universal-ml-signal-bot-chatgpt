@@ -57,10 +57,13 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
                 ctx1h if timeframe == '15m' else 0
             )
         )
-        if context_trend > 0 and not is_buy:
-            continue
-        if context_trend < 0 and is_buy:
-            continue
+        # Preserve baseline training exactly for a fair comparison with the live model.
+        # The new strategy hypotheses incorporate this filter in both labels and setup selection.
+        if strategy != 'baseline':
+            if context_trend > 0 and not is_buy:
+                continue
+            if context_trend < 0 and is_buy:
+                continue
         if strategy == 'baseline':
             if is_buy:
                 entry = max(close[i], low20[i] + span / divisor)
