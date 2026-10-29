@@ -145,8 +145,11 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         entry = ema20
         sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr) if direction == 'BUY' else max(hi + 0.10 * atr, entry + sl_atr_mult * atr)
     elif strategy == 'breakout_retest':
+        # Retest entries use an ATR-bounded protective stop. Using the full
+        # 20-bar range often made risk exceed the 3-ATR safety ceiling, so the
+        # strategy generated no tradable setups even when a breakout occurred.
         entry = hi if direction == 'BUY' else lo
-        sl = min(lo - 0.10 * atr, entry - sl_atr_mult * atr) if direction == 'BUY' else max(hi + 0.10 * atr, entry + sl_atr_mult * atr)
+        sl = entry - sl_atr_mult * atr if direction == 'BUY' else entry + sl_atr_mult * atr
     else:  # momentum_continuation
         entry = close
         sl = entry - sl_atr_mult * atr if direction == 'BUY' else entry + sl_atr_mult * atr
