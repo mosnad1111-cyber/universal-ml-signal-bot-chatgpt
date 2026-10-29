@@ -85,7 +85,9 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
             if not is_breakout:
                 continue
             entry = high20[i] if is_buy else low20[i]
-            stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i]) if is_buy else max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
+            # Keep the label geometry identical to decision.build_setup and
+            # within the 0.55–3.0 ATR tradable-risk bounds.
+            stop = entry - sl_atr_mult * atr[i] if is_buy else entry + sl_atr_mult * atr[i]
         elif strategy == 'momentum_continuation':
             aligned = (ema20 > ema50 > ema200) if is_buy else (ema20 < ema50 < ema200)
             momentum_ok = (rsi >= 55 and macd_hist > 0) if is_buy else (rsi <= 45 and macd_hist < 0)
