@@ -64,7 +64,8 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
             entry = ema20
             stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i]) if is_buy else max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
         elif strategy == 'breakout_retest':
-            if (close[i] <= high20[i]) if is_buy else (close[i] >= low20[i]):
+            is_breakout = close[i] > high20[i] if is_buy else close[i] < low20[i]
+            if not is_breakout:
                 continue
             entry = high20[i] if is_buy else low20[i]
             stop = min(low20[i] - 0.10 * atr[i], entry - sl_atr_mult * atr[i]) if is_buy else max(high20[i] + 0.10 * atr[i], entry + sl_atr_mult * atr[i])
