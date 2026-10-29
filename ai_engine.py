@@ -43,11 +43,13 @@ def _label_direction(x, direction, horizon, rr=2.0, divisor=3.6, sl_atr_mult=1.1
             continue
 
         span = max(high20[i] - low20[i], atr[i])
-        ema20 = float(x['ema20'].iloc[i])
-        ema50 = float(x['ema50'].iloc[i])
-        ema200 = float(x['ema200'].iloc[i])
-        rsi = float(x['rsi'].iloc[i])
-        macd_hist = float(x['macd_hist'].iloc[i])
+        # Baseline geometry does not depend on these indicators; default them only
+        # for lightweight callers/tests that provide OHLC plus ATR/range columns.
+        ema20 = float(x['ema20'].iloc[i]) if 'ema20' in x else float(close[i])
+        ema50 = float(x['ema50'].iloc[i]) if 'ema50' in x else float(close[i])
+        ema200 = float(x['ema200'].iloc[i]) if 'ema200' in x else float(close[i])
+        rsi = float(x['rsi'].iloc[i]) if 'rsi' in x else 50.0
+        macd_hist = float(x['macd_hist'].iloc[i]) if 'macd_hist' in x else 0.0
         is_buy = direction == 1
         # Match the higher-timeframe direction filter used by live/backtest setup selection.
         ctx15 = float(x['ctx15_trend'].iloc[i]) if 'ctx15_trend' in x else 0.0
