@@ -20,7 +20,14 @@ STRATEGY_NAMES = {
     "breakout_retest": "اختراق ثم إعادة اختبار",
     "momentum_continuation": "استمرار الزخم",
 }
-BARS_BY_TF = {"5m": BACKTEST_BARS_5M, "15m": BACKTEST_BARS_15M, "1h": BACKTEST_BARS_1H}
+# Request a larger common history for research even when older environment
+# variables were set to 5,000 bars. Providers may still return fewer bars;
+# that is surfaced by the partial-history warning in the report.
+BARS_BY_TF = {
+    "5m": max(10000, BACKTEST_BARS_5M),
+    "15m": max(10000, BACKTEST_BARS_15M),
+    "1h": max(10000, BACKTEST_BARS_1H),
+}
 
 
 def summarize_trades(trades, cost_r=0.0):
@@ -118,6 +125,10 @@ class StrategyResearchLab:
                     "holdout": summarize_trades(holdout, 0.0),
                     "holdout_cost_005R": summarize_trades(holdout, 0.05),
                     "holdout_cost_010R": summarize_trades(holdout, 0.10),
+                    "setup_candidates": result.get("setup_candidates", 0),
+                    "unfilled_setups": result.get("unfilled_setups", 0),
+                    "rejection_counts": result.get("rejection_counts", {}),
+                    "direction_rejections": result.get("direction_rejections", {}),
                     "unresolved_at_end": result.get("unresolved_at_end", 0),
                     "snapshot_id": result.get("snapshot_id"),
                 }
@@ -165,6 +176,14 @@ class StrategyResearchLab:
                 c10 = res.get("holdout_cost_010R", {})
                 lines.append(f"  حساسية التكلفة: صافي {c05.get('net_after_cost_r', 0):+.1f}R عند 0.05R/صفقة؛ "
                              f"{c10.get('net_after_cost_r', 0):+.1f}R عند 0.10R/صفقة")
+                lines.append(f"  تشخيص الإشارات: إعدادات مقبولة {res.get('setup_candidates', 0)}؛ "
+                             f"إعدادات لم تُفعّل دخولًا {res.get('unfilled_setups', 0)}")
+                if not hold.get("trades", 0):
+                    rejected = res.get("direction_rejections", {})
+                    top = sorted(rejected.items(), key=lambda item: item[1], reverse=True)[:3]
+                    if top:
+                        lines.append("  أكثر أسباب الرفض: " + "؛ ".join(
+                            f"{reason} ({count})" for reason, count in top))
                 if hold.get("trades", 0) < 30:
                     lines.append("  ⚠️ أقل من 30 صفقة في مجموعة الاحتجاز؛ العينة ضعيفة للحكم.")
             lines.append("")
