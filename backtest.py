@@ -291,7 +291,7 @@ class GoldBacktest:
             _SNAPSHOT_CACHE[cache_key] = (time.time(), prepared)
         return {**prepared, 'raw': raw.copy(), 'features': x.copy()}
 
-    def _walk_forward_predictions(self, tf, x, retrain_every, symbol=GOLD_DATA_SYMBOL):
+    def _walk_forward_predictions(self, tf, x, retrain_every, symbol=GOLD_DATA_SYMBOL, strategy='baseline'):
         """Generate/cache deterministic out-of-sample probabilities for a snapshot.
 
         Predictions are generated chronologically using only candles strictly
@@ -299,7 +299,7 @@ class GoldBacktest:
         """
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
-        cache_key = (symbol, tf, int(retrain_every), len(x), start, end)
+        cache_key = (symbol, tf, int(retrain_every), strategy, len(x), start, end)
         now = time.time()
         with _CACHE_LOCK:
             cached = _PREDICTION_CACHE.get(cache_key)
@@ -316,7 +316,7 @@ class GoldBacktest:
             if last_fit < 0 or i - last_fit >= step:
                 model = GoldAI()
                 ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
-                               sl_atr_mult=SL_ATR_MULT, fast_mode=True)
+                               sl_atr_mult=SL_ATR_MULT, fast_mode=True, strategy=strategy)
                 if not ok:
                     continue
                 last_fit = i
@@ -332,7 +332,8 @@ class GoldBacktest:
         return predictions
 
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
-            min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL):
+            min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL,
+            strategy='baseline', include_all_trades=False):
         started = time.time()
         requested_bars = self._requested_bars(tf, bars)
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
@@ -351,7 +352,7 @@ class GoldBacktest:
                     'snapshot_end':x.index[-1].isoformat() if len(x) else None,
                     'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
-                       self._walk_forward_predictions(tf, x, retrain_every, symbol))
+                       self._walk_forward_predictions(tf, x, retrain_every, symbol, strategy))
         min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
             min_score = float(min_score_override)
@@ -373,7 +374,7 @@ class GoldBacktest:
             row = x.iloc[i]
             prefix = pd.concat([x.iloc[:i+1].copy(), row.to_frame().T], axis=0)
             setup = build_setup(prefix, probs, RR, DIVISOR, SL_ATR_MULT,
-                                min_score, min_ai, self._context(tf, row.name, x))
+                                min_score, min_ai, self._context(tf, row.name, x), strategy=strategy)
             if setup:
                 # Backtest evaluates the strategy independently of live signal
                 # suppression switches. Count live-blocked setups for diagnostics,
@@ -461,7 +462,8 @@ class GoldBacktest:
                                              x.index[-1] if len(x) else None),
             'sequence': self._sequence_stats(trades),
             'elapsed_s': round(time.time()-started, 1),
-            'trades_detail': trades[-100:],
+            'trades_detail': trades if include_all_trades else trades[-100:],
+            'strategy': strategy,
         }
         res['symbol'] = symbol
         res['asset_label'] = next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol)
@@ -490,7 +492,7 @@ class GoldBacktest:
         if len(prepared['features']) >= 1200:
             predictions = self._walk_forward_predictions(
                 tf, prepared['features'],
-                int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY), symbol
+                int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY), symbol, 'baseline'
             )
         for score in scores:
             for ai in ai_probs:
