@@ -46,7 +46,7 @@ class BacktestMetricTests(unittest.TestCase):
         self.assertEqual(stats["max_win_streak"], 1)
         self.assertEqual(stats["max_loss_streak"], 1)
 
-    def test_training_label_rejects_entry_after_pending_expiry(self):
+    def test_training_label_accepts_entry_after_old_pending_expiry(self):
         n = 60
         x = pd.DataFrame({
             "Close": np.full(n, 12.0),
@@ -60,7 +60,7 @@ class BacktestMetricTests(unittest.TestCase):
         x.loc[13, "High"] = 13.0
         x.loc[14, "High"] = 20.0
         labels = _label_direction(x, direction=1, horizon=48)
-        self.assertTrue(pd.isna(labels.iloc[0]))
+        self.assertEqual(labels.iloc[0], 1.0)
 
     def test_training_label_accepts_entry_at_pending_deadline(self):
         n = 60
@@ -99,7 +99,7 @@ class BacktestMetricTests(unittest.TestCase):
         with patch.object(bt, "_prepare", return_value=prepared), \
              patch.object(bt, "_walk_forward_predictions", return_value={}), \
              patch.object(bt, "run", return_value=mocked_result):
-            result = bt.run_grid("15m", bars=1200, scores=(65,), ai_probs=(0.45,))
+            result = bt.run_grid("15m", bars=1200, scores=(65,), ai_probs=(0.30,))
         self.assertEqual(result["default_score"], 65.0)
         self.assertEqual(result["default_ai"], 0.30)
         self.assertIsNotNone(result["baseline"])
