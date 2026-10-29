@@ -127,11 +127,10 @@ class StrategyResearchLab:
     def _fmt_metric(m):
         if not m or not m.get("trades"):
             return "0 صفقة"
-        pf = m.get("profit_factor_after_cost", 0.0)
+        pf = m.get("profit_factor", 0.0)
         pf_text = "∞" if math.isinf(pf) else f"{pf:.2f}"
         return (f"{m['trades']} صفقة | WR {m['win_rate']:.1f}% | "
-                f"Net {m['net_r']:+.1f}R | Net بعد تكلفة 0.05R/صفقة "
-                f"{m['net_after_cost_r']:+.1f}R | PF بعد التكلفة {pf_text} | "
+                f"Net {m['net_r']:+.1f}R | PF {pf_text} | "
                 f"DD {m['max_drawdown_r']:.1f}R")
 
     def format_ar(self, report):
