@@ -1,6 +1,6 @@
 """Walk-forward research lab for comparing strategy hypotheses without changing live trading."""
-from datetime import datetime
 import math
+import pandas as pd
 
 from config import (
     ASSETS, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H,
@@ -66,6 +66,8 @@ def split_completed_trades(trades, midpoint):
         exit_time = trade.get("exit_time")
         if not signal_time or not exit_time:
             continue
+        signal_time = pd.Timestamp(signal_time)
+        exit_time = pd.Timestamp(exit_time)
         if signal_time <= midpoint and exit_time <= midpoint:
             calibration.append(trade)
         elif signal_time > midpoint:
