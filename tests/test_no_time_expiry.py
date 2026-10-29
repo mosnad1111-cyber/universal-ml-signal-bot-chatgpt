@@ -6,7 +6,7 @@ from backtest import GoldBacktest
 
 class NoTimeExpiryTests(unittest.TestCase):
     def test_waiting_signal_can_activate_after_old_pending_ttl(self):
-        rows = [{"High": 101.0, "Low": 99.0, "Close": 100.0} for _ in range(15)]
+        rows = [{"High": 99.5, "Low": 98.5, "Close": 99.0} for _ in range(15)]
         rows[13] = {"High": 101.0, "Low": 100.0, "Close": 100.5}
         rows[14] = {"High": 104.0, "Low": 101.0, "Close": 103.0}
         df = pd.DataFrame(rows)
