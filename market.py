@@ -181,6 +181,7 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     errors = []
     with _tv_lock:
         for size_index, n_bars in enumerate(_bar_sizes(requested_bars)):
+            connection_failure = False
             for attempt in range(3):
                 try:
                     tv = _get_tv()
@@ -195,18 +196,25 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                     return df
                 except Exception as exc:
                     errors.append(f'{timeframe}/{n_bars} محاولة {attempt + 1}: {type(exc).__name__}: {exc}')
+                    is_connection_error = _is_connection_error(exc)
+                    connection_failure = connection_failure or is_connection_error
                     global _tv
                     _tv = None
                     if attempt < 2:
                         delay = min(12.0, 2.5 * (2 ** attempt))
-                        if not _is_connection_error(exc):
+                        if not is_connection_error:
                             delay = min(delay, 4.0)
                         time.sleep(delay)
+            # Smaller history windows can help with TradingView's bar limits,
+            # but cannot repair a broken socket. Stop instead of repeating the
+            # same failed connection across every fallback size.
+            if connection_failure:
+                break
             if size_index < len(_bar_sizes(requested_bars)) - 1:
                 time.sleep(2.0)
     if rest_error:
         errors.append(rest_error)
-    raise RuntimeError(f'تعذر جلب بيانات السوق {symbol} بعد التدرج في حجم البيانات. ' + ' | '.join(errors))
+    raise RuntimeError(f'تعذر جلب بيانات السوق {symbol} بعد إعادة المحاولة. ' + ' | '.join(errors))
 
 
 def _rsi(close, n=14):
