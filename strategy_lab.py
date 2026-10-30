@@ -129,6 +129,7 @@ class StrategyResearchLab:
                     "unfilled_setups": result.get("unfilled_setups", 0),
                     "rejection_counts": result.get("rejection_counts", {}),
                     "direction_rejections": result.get("direction_rejections", {}),
+                    "model_fit_diagnostics": result.get("model_fit_diagnostics", {}),
                     "unresolved_at_end": result.get("unresolved_at_end", 0),
                     "snapshot_id": result.get("snapshot_id"),
                 }
@@ -178,6 +179,15 @@ class StrategyResearchLab:
                              f"{c10.get('net_after_cost_r', 0):+.1f}R عند 0.10R/صفقة")
                 lines.append(f"  تشخيص الإشارات: إعدادات مقبولة {res.get('setup_candidates', 0)}؛ "
                              f"إعدادات لم تُفعّل دخولًا {res.get('unfilled_setups', 0)}")
+                fit_diag = res.get("model_fit_diagnostics", {})
+                if fit_diag.get("fit_failures", 0) or fit_diag.get("model_unavailable_candles", 0):
+                    lines.append(
+                        f"  تشخيص التدريب: محاولات {fit_diag.get('fit_attempts', 0)}؛ "
+                        f"فشل إعادة التدريب {fit_diag.get('fit_failures', 0)}؛ "
+                        f"شموع بلا نموذج {fit_diag.get('model_unavailable_candles', 0)}"
+                    )
+                    if fit_diag.get("last_fit_error"):
+                        lines.append(f"  آخر خطأ تدريب: {str(fit_diag['last_fit_error'])[:180]}")
                 if not hold.get("trades", 0):
                     rejected = res.get("direction_rejections", {})
                     top = sorted(rejected.items(), key=lambda item: item[1], reverse=True)[:3]
