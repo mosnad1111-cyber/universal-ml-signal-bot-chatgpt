@@ -30,6 +30,7 @@ class WalkForwardFitFailureTests(unittest.TestCase):
     def setUp(self):
         FakeAI.fit_calls = 0
         FakeAI.first_fit_succeeds = False
+        backtest._PREDICTION_CACHE.clear()
         self.frame = pd.DataFrame(
             {"Close": [100.0] * 1000},
             index=pd.date_range("2026-01-01", periods=1000, freq="5min", tz="UTC"),
