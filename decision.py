@@ -155,7 +155,13 @@ def build_setup(df, probs, rr=2.0, divisor=3.6, sl_atr_mult=1.15,
         sl = entry - sl_atr_mult * atr if direction == 'BUY' else entry + sl_atr_mult * atr
     tp = entry + rr * (entry - sl) if direction == 'BUY' else entry - rr * (sl - entry)
 
-    risk = abs(entry - sl); risk_atr = risk / atr if atr else float('inf'); diagnostics['risk_atr'] = round(risk_atr, 3)
+    risk = abs(entry - sl); risk_atr = risk / atr if atr else float('inf')
+    diagnostics.update({
+        'candidate_entry': round(entry, 6),
+        'candidate_sl': round(sl, 6),
+        'risk_price': round(risk, 6),
+        'risk_atr': round(risk_atr, 3),
+    })
     if risk < 0.55 * atr or risk > 3.0 * atr:
         diagnostics['reject'] = 'risk_out_of_range'; return None
 
