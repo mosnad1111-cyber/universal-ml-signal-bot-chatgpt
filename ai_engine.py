@@ -185,8 +185,17 @@ class GoldAI:
             self.errors[timeframe]='insufficient_temporal_split'; return False
         train=pd.concat(train_parts).sort_index(kind='stable'); val=pd.concat(val_parts).sort_index(kind='stable')
         Xtr=train[FEATURES]; ytr=train['_label']; Xv=val[FEATURES]; yv=val['_label']
-        if len(Xtr)<600 or len(Xv)<40 or ytr.nunique()<2 or yv.nunique()<2:
-            self.errors[timeframe]=f'invalid_class_distribution:train={len(Xtr)} val={len(Xv)}'; return False
+        if len(Xtr)<600 or len(Xv)<40 or ytr.nunique()<2:
+            self.errors[timeframe] = (
+                f'invalid_training_distribution:train_rows={len(Xtr)} '
+                f'train_classes={ytr.nunique()} val_rows={len(Xv)} '
+                f'val_classes={yv.nunique()}'
+            )
+            return False
+        # A chronological validation fold can legitimately contain one class,
+        # especially for strategy-specific labels and short history windows.
+        # The model only needs both classes in the training set. Validation
+        # metrics below already skip AUC when the validation fold is single-class.
 
         # Walk-forward backtests only need the final deployment model for each
         # fold. Skip the separate validation fit/metrics fit and train once on
