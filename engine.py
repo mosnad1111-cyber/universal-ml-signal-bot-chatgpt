@@ -78,8 +78,13 @@ class Engine:
                     history=self._completed(fetch(symbol,tf,period=MODEL_HISTORY_BARS))
                     x=self._enrich(tf,add_features(history).dropna(),symbol)
                     ok=ai.fit(tf,x,RR,divisor=DIVISOR,sl_atr_mult=SL_ATR_MULT); self.model_training_ok[key]=bool(ok)
-                    if ok: successes+=1
-                    else: ai.errors.setdefault(tf,'fit_returned_false')
+                    if ok:
+                        successes+=1
+                        fit_info = ai.metrics.get(tf, {})
+                        print(f"[model-fit] {symbol} {tf}: success engine={fit_info.get('engine','-')} rows={fit_info.get('deployment_training_rows', fit_info.get('training_rows','-'))}", flush=True)
+                    else:
+                        ai.errors.setdefault(tf,'fit_returned_false')
+                        print(f"[model-fit] ERROR {symbol} {tf}: {ai.errors.get(tf, 'fit_returned_false')}", flush=True)
                 except Exception as exc:
                     self.model_training_ok[key]=False; ai.errors[tf]=f'{type(exc).__name__}: {exc}'; traceback.print_exc()
         self.last_model=time.time() if successes == expected else 0
@@ -203,6 +208,7 @@ class Engine:
                                 f"candle={d.get('candle_time','-')} "
                                 f"buy_ai={d.get('buy_ai','-')} sell_ai={d.get('sell_ai','-')} "
                                 f"buy_score={d.get('buy_score','-')} sell_score={d.get('sell_score','-')} "
+                                f"risk_atr={d.get('risk_atr','-')} "
                                 f"reject={d.get('reject','-')}"
                             )
                         except Exception as exc:
