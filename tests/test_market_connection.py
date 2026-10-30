@@ -28,7 +28,10 @@ class MarketConnectionTests(unittest.TestCase):
 
     def test_socket_failure_does_not_retry_every_smaller_bar_window(self):
         client = BrokenTVClient()
-        with patch.object(market, "_get_tv", return_value=client), patch.object(market.time, "sleep"):
+        fake_interval = type("FakeInterval", (), {"in_5_minute": "5m"})
+        with patch.object(market, "_get_tv", return_value=client), patch.object(
+            market, "Interval", fake_interval
+        ), patch.object(market.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "بعد إعادة المحاولة"):
                 market.fetch("TVC:GOLD", "5m", period=5000)
 
