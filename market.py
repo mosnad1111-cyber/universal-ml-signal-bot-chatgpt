@@ -1,3 +1,4 @@
+import os
 import time
 import warnings
 import threading
@@ -38,7 +39,14 @@ def _get_tv():
         raise RuntimeError(f'مكتبة TradingView غير متاحة: {_TV_IMPORT_ERROR}. تحقق من requirements.txt ثم أعد النشر.')
     with _tv_lock:
         if _tv is None:
-            _tv = TvDatafeed()
+            username = os.getenv('TV_USERNAME', '').strip()
+            password = os.getenv('TV_PASSWORD', '').strip()
+            if username and password:
+                _tv = TvDatafeed(username=username, password=password)
+                print('[market] TradingView client initialized with configured credentials', flush=True)
+            else:
+                _tv = TvDatafeed()
+                print('[market] WARNING: TV_USERNAME/TV_PASSWORD are not configured; using anonymous TradingView access', flush=True)
         return _tv
 
 
