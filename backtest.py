@@ -277,8 +277,7 @@ class GoldBacktest:
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
         snapshot_id = f'{symbol}:{tf}:{requested_bars}:{len(raw)}:{start}:{end}'
-        prepared = {
-            'raw': raw.copy(),
+        prepared = {            'raw': raw.copy(),
             'features': x.copy(),
             'requested_bars': requested_bars,
             'received_bars': received_bars,
@@ -311,22 +310,43 @@ class GoldBacktest:
         warmup = 700
         step = max(200, int(retrain_every))
         predictions = {}
-        model = GoldAI()
+        model = None
         last_fit = -1
+        fit_attempts = 0
+        fit_failures = 0
+        last_fit_error = None
         for i in range(warmup, len(x) - 1):
             if last_fit < 0 or i - last_fit >= step:
-                model = GoldAI()
-                ok = model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
-                               sl_atr_mult=SL_ATR_MULT, fast_mode=True, strategy=strategy)
-                # Avoid re-running an expensive failed fit on every candle.
+                candidate_model = GoldAI()
+                ok = candidate_model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
+                                         sl_atr_mult=SL_ATR_MULT, fast_mode=True,
+                                         strategy=strategy)
+                # Keep the last successfully trained model if a later refit fails.
+                # Resetting to an empty model here caused thousands of misleading
+                # no_model_probability rejections after a single failed fit.
                 last_fit = i
-                if not ok:
-                    continue
+                fit_attempts += 1
+                if ok:
+                    model = candidate_model
+                else:
+                    fit_failures += 1
+                    last_fit_error = candidate_model.errors.get(tf, 'fit_returned_false')
+            if model is None or tf not in model.models:
+                continue
             row = x.iloc[i]
-            predictions[i] = {
-                'BUY': model.probability(tf, row, 'BUY'),
-                'SELL': model.probability(tf, row, 'SELL'),
-            }
+            buy_prob = model.probability(tf, row, 'BUY')
+            sell_prob = model.probability(tf, row, 'SELL')
+            if buy_prob is None and sell_prob is None:
+                continue
+            predictions[i] = {'BUY': buy_prob, 'SELL': sell_prob}
+        expected_predictions = max(0, len(x) - 1 - warmup)
+        diagnostics = {
+            'fit_attempts': fit_attempts,
+            'fit_failures': fit_failures,
+            'last_fit_error': last_fit_error,
+            'model_unavailable_candles': max(0, expected_predictions - len(predictions)),
+        }
+        predictions['_diagnostics'] = diagnostics
         with _CACHE_LOCK:
             _PREDICTION_CACHE[cache_key] = (
                 time.time(), {i: dict(p) for i, p in predictions.items()}
@@ -355,17 +375,22 @@ class GoldBacktest:
                     'snapshot_reused':prepared.get('snapshot_reused', False)}
         predictions = (_predictions if _predictions is not None else
                        self._walk_forward_predictions(tf, x, retrain_every, symbol, strategy))
-        if not predictions:
+        prediction_diagnostics = predictions.get('_diagnostics', {})
+        prediction_count = sum(isinstance(key, int) for key in predictions)
+        if prediction_count == 0:
             return {
                 'timeframe': tf, 'symbol': symbol,
                 'asset_label': next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol),
-                'error': f'no_walk_forward_predictions_for_strategy:{strategy}',
+                'error': f'no_walk_forward_predictions_for_strategy:{strategy}; '
+                         f"fit_failures={prediction_diagnostics.get('fit_failures', 0)}; "
+                         f"last_fit_error={prediction_diagnostics.get('last_fit_error')}",
                 'strategy': strategy, 'requested_bars': requested_bars,
                 'raw_bars': prepared.get('received_bars', len(raw)),
                 'completed_bars': len(raw), 'usable_bars': len(x),
                 'history_partial': history_partial, 'snapshot_id': prepared.get('snapshot_id'),
                 'snapshot_start': x.index[0].isoformat() if len(x) else None,
                 'snapshot_end': x.index[-1].isoformat() if len(x) else None,
+                'model_fit_diagnostics': prediction_diagnostics,
             }
         min_score, min_ai = thresholds_for(tf)
         if min_score_override is not None:
@@ -461,6 +486,7 @@ class GoldBacktest:
             'raw_bars': prepared.get('received_bars', len(raw)),
             'completed_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
             'history_partial': history_partial,
+            'model_fit_diagnostics': prediction_diagnostics,
             'snapshot_id': prepared.get('snapshot_id'),
             'snapshot_start': x.index[0].isoformat() if len(x) else None,
             'snapshot_end': x.index[-1].isoformat() if len(x) else None,
@@ -557,8 +583,7 @@ class GoldBacktest:
                 'bars':requested_bars, 'raw_bars':prepared.get('received_bars', len(prepared['raw'])),
                 'completed_bars':len(prepared['raw']),
                 'usable_bars':len(prepared['features']),
-                'history_partial':prepared['history_partial'],
-                'snapshot_id':prepared.get('snapshot_id'),
+                'history_partial':prepared['history_partial'],                'snapshot_id':prepared.get('snapshot_id'),
                 'snapshot_reused':prepared.get('snapshot_reused', False),
                 'snapshot_start':prepared['features'].index[0].isoformat() if len(prepared['features']) else None,
                 'snapshot_end':prepared['features'].index[-1].isoformat() if len(prepared['features']) else None,
