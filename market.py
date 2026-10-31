@@ -151,6 +151,77 @@ def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
     return frame
 
 
+
+def _fetch_yahoo_gold(timeframe: str, requested_bars: int) -> pd.DataFrame:
+    """Fetch XAU/USD spot candles from Yahoo Finance chart data (no TradingView login)."""
+    if requests is None:
+        raise RuntimeError("The requests package is required for Yahoo Finance gold data.")
+    interval_seconds = {'5m': 300, '15m': 900, '1h': 3600}[timeframe]
+    interval = {'5m': '5m', '15m': '15m', '1h': '1h'}[timeframe]
+    now = int(time.time())
+    # Yahoo's intraday retention is limited: 5m/15m up to 60 days, 1h up to 730 days.
+    max_history = 60 * 86400 if timeframe in ('5m', '15m') else 730 * 86400
+    desired_history = int(max(250, requested_bars) * interval_seconds * 1.10)
+    period1 = now - min(max_history, desired_history)
+    errors = []
+    payload = None
+    for host in ('query1.finance.yahoo.com', 'query2.finance.yahoo.com'):
+        url = f'https://{host}/v8/finance/chart/XAUUSD%3DX'
+        try:
+            response = requests.get(
+                url,
+                params={'period1': period1, 'period2': now + 60, 'interval': interval,
+                        'events': 'history', 'includeAdjustedClose': 'false'},
+                timeout=(5, 20),
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; market-data-client/1.0)'},
+            )
+            response.raise_for_status()
+            candidate = response.json()
+            chart = candidate.get('chart', {})
+            if chart.get('error'):
+                raise RuntimeError(str(chart['error']))
+            results = chart.get('result') or []
+            if not results:
+                raise RuntimeError('Yahoo Finance returned no XAU/USD chart result.')
+            payload = results[0]
+            break
+        except Exception as exc:
+            errors.append(f'{host}: {type(exc).__name__}: {exc}')
+    if payload is None:
+        raise RuntimeError('Yahoo Finance XAU/USD failed: ' + ' | '.join(errors))
+
+    timestamps = payload.get('timestamp') or []
+    quote_list = payload.get('indicators', {}).get('quote') or []
+    if not timestamps or not quote_list:
+        raise RuntimeError('Yahoo Finance XAU/USD response has no candles.')
+    quote = quote_list[0]
+    frame = pd.DataFrame({
+        'Open': quote.get('open') or [],
+        'High': quote.get('high') or [],
+        'Low': quote.get('low') or [],
+        'Close': quote.get('close') or [],
+        'Volume': quote.get('volume') or [0] * len(timestamps),
+    }, index=pd.to_datetime(timestamps, unit='s', utc=True))
+    frame = frame.reindex(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
+    for column in frame.columns:
+        frame[column] = pd.to_numeric(frame[column], errors='coerce')
+    frame = frame.dropna(subset=['Open', 'High', 'Low', 'Close'])
+    frame = frame[~frame.index.duplicated(keep='last')].sort_index().tail(requested_bars)
+    if len(frame) < 250:
+        raise RuntimeError(f'Yahoo Finance XAU/USD returned only {len(frame)} valid candles; at least 250 are required.')
+    print(
+        f'[market] Yahoo Finance XAU/USD spot {timeframe}: requested={requested_bars}, '
+        f'received={len(frame)}, first={frame.index[0].isoformat()}, last={frame.index[-1].isoformat()}',
+        flush=True,
+    )
+    if len(frame) < requested_bars:
+        print(
+            f'[market] WARNING XAU/USD history is partial on Yahoo Finance: '
+            f'requested={requested_bars}, received={len(frame)} (intraday retention limit)',
+            flush=True,
+        )
+    return frame
+
 def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     if timeframe not in INTERVALS:
         raise RuntimeError(f'فريم غير مدعوم: {timeframe}')
@@ -163,6 +234,13 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
         item = _cache.get(cache_key)
         if item and now - item[0] < CACHE_SECONDS:
             return item[1].copy()
+
+    # Gold uses Yahoo Finance XAU/USD spot data; TradingView authentication is not required.
+    if symbol == 'TVC:GOLD':
+        df = _fetch_yahoo_gold(timeframe, requested_bars)
+        with _cache_lock:
+            _cache[cache_key] = (time.time(), df.copy())
+        return df
 
     # BTC's Binance REST endpoint is the primary source: unlike the anonymous
     # TradingView WebSocket it does not depend on a long-lived socket, and keeps
