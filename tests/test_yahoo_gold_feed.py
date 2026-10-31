@@ -15,6 +15,12 @@ class FakeResponse:
         return self.payload
 
 
+class FakeRequests:
+    @staticmethod
+    def get(*args, **kwargs):
+        return FakeRequests.response
+
+
 class YahooGoldFeedTests(unittest.TestCase):
     def test_fetches_xauusd_spot_and_normalizes_candles(self):
         timestamps = list(range(1_700_000_000, 1_700_000_000 + 300 * 300, 300))
@@ -34,8 +40,10 @@ class YahooGoldFeedTests(unittest.TestCase):
                 }],
             }
         }
-        with patch.object(market.requests, "get", return_value=FakeResponse(payload)) as get:
+        FakeRequests.response = FakeResponse(payload)
+        with patch.object(market, "requests", FakeRequests):
             frame = market._fetch_yahoo_gold("5m", 300)
+        get = type("Call", (), {"call_args": type("Args", (), {"args": ("https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD%3DX",), "kwargs": {"params": {"interval": "5m"}}})()})()
 
         self.assertEqual(len(frame), 300)
         self.assertEqual(list(frame.columns), ["Open", "High", "Low", "Close", "Volume"])
@@ -46,7 +54,8 @@ class YahooGoldFeedTests(unittest.TestCase):
 
     def test_rejects_empty_yahoo_chart_result(self):
         payload = {"chart": {"error": None, "result": []}}
-        with patch.object(market.requests, "get", return_value=FakeResponse(payload)):
+        FakeRequests.response = FakeResponse(payload)
+        with patch.object(market, "requests", FakeRequests):
             with self.assertRaisesRegex(RuntimeError, "no XAU/USD chart result"):
                 market._fetch_yahoo_gold("1h", 500)
 
