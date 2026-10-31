@@ -29,11 +29,11 @@ class MarketConnectionTests(unittest.TestCase):
     def test_socket_failure_does_not_retry_every_smaller_bar_window(self):
         client = BrokenTVClient()
         fake_interval = type("FakeInterval", (), {"in_5_minute": "5m"})
-        with patch.object(market, "_get_tv", return_value=client), patch.object(
+        with patch.object(market, "_fetch_binance_rest", side_effect=RuntimeError("Binance unavailable")), patch.object(market, "_get_tv", return_value=client), patch.object(
             market, "Interval", fake_interval
         ), patch.object(market.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "بعد إعادة المحاولة"):
-                market.fetch("TVC:GOLD", "5m", period=5000)
+                market.fetch("BINANCE:BTCUSDT", "5m", period=5000)
 
         self.assertEqual(client.calls, 3)
 
