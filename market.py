@@ -203,11 +203,19 @@ def _fetch_twelvedata_gold(timeframe: str, requested_bars: int) -> pd.DataFrame:
         'close': 'Close', 'volume': 'Volume',
     })
     if 'Volume' not in frame.columns:
-        frame['Volume'] = 0.0
+        frame['Volume'] = np.nan
     frame = frame[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
     for column in frame.columns:
         frame[column] = pd.to_numeric(frame[column], errors='coerce')
     frame = frame.dropna(subset=['Open', 'High', 'Low', 'Close'])
+    # Twelve Data's Gold Spot feed may omit traded volume. A zero-filled
+    # volume series makes vol_ratio = 0/0 and drops every training row.
+    # Use a neutral constant volume proxy when the feed has no usable volume;
+    # this preserves price-derived features without pretending real volume exists.
+    if frame['Volume'].isna().all() or (frame['Volume'].fillna(0) == 0).all():
+        frame['Volume'] = 1.0
+    else:
+        frame['Volume'] = frame['Volume'].fillna(frame['Volume'].median())
     frame = frame[~frame.index.duplicated(keep='last')].sort_index().tail(requested_bars)
     if len(frame) < 250:
         raise RuntimeError(
