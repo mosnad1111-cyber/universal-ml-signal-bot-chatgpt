@@ -31,6 +31,16 @@ class DukascopyGoldNormalizationTests(unittest.TestCase):
         self.assertTrue(normalized.index.is_monotonic_increasing)
         self.assertFalse(normalized.index.has_duplicates)
 
+    def test_short_month_chunk_is_normalized_without_minimum_history_rejection(self):
+        raw = pd.DataFrame(
+            {"open": [2700.0] * 20, "high": [2701.0] * 20,
+             "low": [2699.0] * 20, "close": [2700.5] * 20},
+            index=pd.date_range("2026-10-01", periods=20, freq="1h", tz="UTC"),
+        )
+        normalized = market._normalize_dukascopy_gold(raw)
+        self.assertEqual(len(normalized), 20)
+        self.assertTrue((normalized["Volume"] == 1.0).all())
+
     def test_gold_fetch_uses_dukascopy_adapter(self):
         frame = pd.DataFrame(
             {
