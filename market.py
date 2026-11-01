@@ -14,6 +14,14 @@ warnings.filterwarnings('ignore')
 # Instruments are selected by their TradingView symbol (e.g. TVC:GOLD, BINANCE:BTCUSDT).
 from config import ASSETS
 try:
+    import dukascopy_python as _duka
+    from dukascopy_python import instruments as _duka_instruments
+    _DUKA_IMPORT_ERROR = None
+except Exception as exc:
+    _duka = None
+    _duka_instruments = None
+    _DUKA_IMPORT_ERROR = exc
+try:
     from tvDatafeed import TvDatafeed, Interval
 except Exception as exc:
     TvDatafeed = None
@@ -29,6 +37,7 @@ INTERVALS = {'5m': 'in_5_minute', '15m': 'in_15_minute', '1h': 'in_1_hour'}
 _tv = None
 _tv_lock = threading.RLock()
 _cache = {}
+_gold_cache = {}
 _cache_lock = threading.RLock()
 CACHE_SECONDS = 30
 
@@ -152,88 +161,158 @@ def _fetch_binance_rest(timeframe: str, requested_bars: int) -> pd.DataFrame:
 
 
 
-def _fetch_twelvedata_gold(timeframe: str, requested_bars: int) -> pd.DataFrame:
-    """Fetch XAU/USD spot candles from Twelve Data's Gold Spot commodity feed."""
-    if requests is None:
-        raise RuntimeError("The requests package is required for Twelve Data gold data.")
-    api_key = os.getenv('TWELVEDATA_API_KEY', '').strip()
-    if not api_key:
-        raise RuntimeError(
-            "Twelve Data XAU/USD spot is configured but TWELVEDATA_API_KEY is missing. "
-            "Add a Twelve Data API key to Render environment variables."
-        )
-    interval = {'5m': '5min', '15m': '15min', '1h': '1h'}[timeframe]
-    outputsize = min(5000, max(250, int(requested_bars)))
-    try:
-        response = requests.get(
-            'https://api.twelvedata.com/time_series',
-            params={
-                'symbol': 'XAU/USD',
-                'interval': interval,
-                'outputsize': outputsize,
-                'timezone': 'UTC',
-                'format': 'JSON',
-                'apikey': api_key,
-            },
-            timeout=(5, 25),
-            headers={'User-Agent': 'universal-ml-signal-bot/1.1'},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:
-        raise RuntimeError(f'Twelve Data XAU/USD spot request failed: {type(exc).__name__}: {exc}') from exc
+def _normalize_dukascopy_gold(raw: pd.DataFrame) -> pd.DataFrame:
+    """Normalize Dukascopy BID candles while preserving the model's neutral volume proxy."""
+    if raw is None or raw.empty:
+        raise RuntimeError('Dukascopy أعاد بيانات ذهب فارغة.')
 
-    if not isinstance(payload, dict):
-        raise RuntimeError('Twelve Data XAU/USD spot returned an invalid response.')
-    if payload.get('status') == 'error' or payload.get('code'):
-        message = payload.get('message') or payload.get('error') or str(payload)
-        raise RuntimeError(f'Twelve Data XAU/USD spot API error: {message}')
-    values = payload.get('values') or []
-    if not values:
-        raise RuntimeError('Twelve Data XAU/USD spot returned no candles.')
+    frame = raw.copy()
+    frame.columns = [str(column).strip().lower() for column in frame.columns]
+    if 'timestamp' in frame.columns:
+        frame['timestamp'] = pd.to_datetime(frame['timestamp'], utc=True, errors='coerce')
+        frame = frame.set_index('timestamp')
+    elif 'time' in frame.columns:
+        frame['time'] = pd.to_datetime(frame['time'], utc=True, errors='coerce')
+        frame = frame.set_index('time')
+    else:
+        frame.index = pd.to_datetime(frame.index, utc=True, errors='coerce')
 
-    frame = pd.DataFrame(values)
-    required = ['datetime', 'open', 'high', 'low', 'close']
+    required = ['open', 'high', 'low', 'close']
     missing = [column for column in required if column not in frame.columns]
     if missing:
-        raise RuntimeError('Twelve Data XAU/USD spot response is missing: ' + ', '.join(missing))
-    frame['datetime'] = pd.to_datetime(frame['datetime'], utc=True, errors='coerce')
-    frame = frame.set_index('datetime').rename(columns={
-        'open': 'Open', 'high': 'High', 'low': 'Low',
-        'close': 'Close', 'volume': 'Volume',
+        raise RuntimeError('Dukascopy response is missing OHLC columns: ' + ', '.join(missing))
+
+    frame = frame.rename(columns={
+        'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'
     })
-    if 'Volume' not in frame.columns:
-        frame['Volume'] = np.nan
-    frame = frame[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-    for column in frame.columns:
+    for column in ['Open', 'High', 'Low', 'Close']:
         frame[column] = pd.to_numeric(frame[column], errors='coerce')
     frame = frame.dropna(subset=['Open', 'High', 'Low', 'Close'])
-    # Twelve Data's Gold Spot feed may omit traded volume. A zero-filled
-    # volume series makes vol_ratio = 0/0 and drops every training row.
-    # Use a neutral constant volume proxy when the feed has no usable volume;
-    # this preserves price-derived features without pretending real volume exists.
-    if frame['Volume'].isna().all() or (frame['Volume'].fillna(0) == 0).all():
-        frame['Volume'] = 1.0
-    else:
-        frame['Volume'] = frame['Volume'].fillna(frame['Volume'].median())
-    frame = frame[~frame.index.duplicated(keep='last')].sort_index().tail(requested_bars)
-    if len(frame) < 250:
+    frame = frame[~frame.index.isna()]
+    frame = frame[~frame.index.duplicated(keep='last')].sort_index()
+
+    # Keep the established feature semantics unchanged. Dukascopy tick volume is
+    # intentionally NOT substituted for the previous neutral constant proxy.
+    frame['Volume'] = 1.0
+    frame = frame[['Open', 'High', 'Low', 'Close', 'Volume']]
+    # Monthly chunks can legitimately contain fewer than 250 bars (especially 1h).
+    # Validate the combined history after all chunks have been merged instead.
+    return frame
+
+
+def _dukascopy_interval(timeframe: str):
+    if _duka is None or _duka_instruments is None:
         raise RuntimeError(
-            f'Twelve Data XAU/USD spot returned only {len(frame)} valid candles; '
-            'at least 250 are required.'
+            f'مكتبة Dukascopy غير متاحة: {_DUKA_IMPORT_ERROR}. '
+            'تحقق من تثبيت dukascopy-python==4.0.1.'
         )
-    print(
-        f'[market] Twelve Data Gold Spot XAU/USD {timeframe}: requested={requested_bars}, '
-        f'received={len(frame)}, first={frame.index[0].isoformat()}, '
-        f'last={frame.index[-1].isoformat()}',
-        flush=True,
-    )
-    if len(frame) < requested_bars:
+    instrument = getattr(_duka_instruments, 'INSTRUMENT_FX_METALS_XAU_USD', None)
+    if instrument is None:
+        raise RuntimeError('مكتبة Dukascopy لا تحتوي على رمز XAU/USD المطلوب.')
+    interval_name = {'5m': 'INTERVAL_MIN_5', '15m': 'INTERVAL_MIN_15', '1h': 'INTERVAL_HOUR_1'}[timeframe]
+    interval = getattr(_duka, interval_name, None)
+    if interval is None:
+        raise RuntimeError(f'فريم Dukascopy غير متاح في المكتبة: {timeframe}')
+    side = getattr(_duka, 'OFFER_SIDE_BID', None)
+    if side is None:
+        raise RuntimeError('مكتبة Dukascopy لا توفر تسعير BID المطلوب.')
+    return instrument, interval, side
+
+
+def _fetch_dukascopy_range(timeframe: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """Fetch a UTC range in monthly chunks with bounded retries."""
+    instrument, interval, side = _dukascopy_interval(timeframe)
+    chunks = []
+    cursor = pd.Timestamp(start).tz_convert('UTC').replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = pd.Timestamp(end).tz_convert('UTC')
+
+    while cursor < end:
+        next_month = cursor + pd.DateOffset(months=1)
+        chunk_start = max(pd.Timestamp(start), cursor)
+        chunk_end = min(end, next_month)
+        if chunk_end <= chunk_start:
+            cursor = next_month
+            continue
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                raw = _duka.fetch(
+                    instrument, interval, side,
+                    chunk_start.to_pydatetime(), chunk_end.to_pydatetime()
+                )
+                if raw is not None and not raw.empty:
+                    chunks.append(_normalize_dukascopy_gold(raw))
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(1.5 * (2 ** attempt))
+        if last_error is not None:
+            raise RuntimeError(
+                f'Dukascopy XAU/USD {timeframe} failed for '
+                f'{chunk_start.isoformat()}..{chunk_end.isoformat()}: '
+                f'{type(last_error).__name__}: {last_error}'
+            ) from last_error
+        cursor = next_month
+        if cursor < end:
+            time.sleep(0.25)
+
+    if not chunks:
+        raise RuntimeError(f'Dukascopy لم يُرجع شموع XAU/USD للفريم {timeframe}.')
+    merged = pd.concat(chunks)
+    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+    if len(merged) < 250:
+        raise RuntimeError(
+            f'Dukascopy XAU/USD {timeframe}: مجموع البيانات الصالحة {len(merged)} شمعة فقط؛ '
+            'يلزم 250 على الأقل.'
+        )
+    return merged
+
+
+def _fetch_dukascopy_gold(timeframe: str, requested_bars: int) -> pd.DataFrame:
+    """Load historical XAU/USD once, then refresh the recent three-day window periodically."""
+    now = pd.Timestamp.now(tz='UTC')
+    key = (timeframe, int(requested_bars))
+    with _cache_lock:
+        cached = _gold_cache.get(key)
+
+    if cached is None:
+        seconds_per_bar = {'5m': 300, '15m': 900, '1h': 3600}[timeframe]
+        history_start = now - pd.Timedelta(seconds=seconds_per_bar * max(250, requested_bars) * 1.08)
+        history_start -= pd.Timedelta(days=2)
+        frame = _fetch_dukascopy_range(timeframe, history_start, now)
+        frame = frame.tail(requested_bars)
+        if len(frame) < 250:
+            raise RuntimeError(f'Dukascopy XAU/USD {timeframe}: التاريخ المتاح {len(frame)} شمعة فقط.')
+        with _cache_lock:
+            _gold_cache[key] = (time.time(), frame.copy())
         print(
-            f'[market] WARNING XAU/USD spot history partial: '
-            f'requested={requested_bars}, received={len(frame)}',
+            f'[market] Dukascopy Gold XAU/USD {timeframe}: initial_history={len(frame)}, '
+            f'first={frame.index[0].isoformat()}, last={frame.index[-1].isoformat()}',
             flush=True,
         )
+        return frame
+
+    refreshed_at, old_frame = cached
+    if time.time() - refreshed_at < 45:
+        return old_frame.copy()
+
+    # Only re-download the recent window; keep the large historical training set in memory.
+    recent_start = now - pd.Timedelta(days=3)
+    recent = _fetch_dukascopy_range(timeframe, recent_start, now)
+    frame = pd.concat([old_frame, recent])
+    frame = frame[~frame.index.duplicated(keep='last')].sort_index().tail(requested_bars)
+    if len(frame) < 250:
+        raise RuntimeError(f'Dukascopy XAU/USD {timeframe}: بعد التحديث بقيت {len(frame)} شمعة فقط.')
+    with _cache_lock:
+        _gold_cache[key] = (time.time(), frame.copy())
+    print(
+        f'[market] Dukascopy Gold XAU/USD {timeframe}: refreshed={len(recent)}, '
+        f'total={len(frame)}, latest={frame.index[-1].isoformat()}',
+        flush=True,
+    )
     return frame
 
 
@@ -250,9 +329,9 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
         if item and now - item[0] < CACHE_SECONDS:
             return item[1].copy()
 
-    # Gold uses Twelve Data's XAU/USD Gold Spot feed; it never silently substitutes futures.
+    # Gold uses Dukascopy XAU/USD BID candles only; failures never fall back to another venue.
     if symbol == 'TVC:GOLD':
-        df = _fetch_twelvedata_gold(timeframe, requested_bars)
+        df = _fetch_dukascopy_gold(timeframe, requested_bars)
         with _cache_lock:
             _cache[cache_key] = (time.time(), df.copy())
         return df
