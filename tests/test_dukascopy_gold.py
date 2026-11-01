@@ -8,18 +8,16 @@ import market
 
 class DukascopyGoldNormalizationTests(unittest.TestCase):
     def test_normalizes_ohlc_to_utc_and_keeps_neutral_volume_proxy(self):
-        index = pd.to_datetime([
-            "2026-10-30T10:05:00Z",
-            "2026-10-30T10:00:00Z",
-            "2026-10-30T10:00:00Z",
-        ])
+        index = pd.date_range("2026-10-30T10:00:00Z", periods=250, freq="5min")
+        index = index.append(pd.DatetimeIndex([index[0]]))
+        values = list(range(250)) + [999]
         raw = pd.DataFrame(
             {
-                "open": [2701.0, 2700.0, 2700.5],
-                "high": [2702.0, 2701.0, 2701.5],
-                "low": [2700.0, 2699.0, 2699.5],
-                "close": [2701.5, 2700.5, 2701.0],
-                "volume": [18.0, 12.0, 14.0],
+                "open": [2700.0 + value / 100 for value in values],
+                "high": [2701.0 + value / 100 for value in values],
+                "low": [2699.0 + value / 100 for value in values],
+                "close": [2700.5 + value / 100 for value in values],
+                "volume": [10.0] * len(values),
             },
             index=index,
         )
@@ -27,8 +25,8 @@ class DukascopyGoldNormalizationTests(unittest.TestCase):
         normalized = market._normalize_dukascopy_gold(raw)
 
         self.assertEqual(list(normalized.columns), ["Open", "High", "Low", "Close", "Volume"])
-        self.assertEqual(len(normalized), 2)
-        self.assertTrue(str(normalized.index.tz).upper() in ("UTC", "UTC+00:00"))
+        self.assertEqual(len(normalized), 250)
+        self.assertEqual(str(normalized.index.tz), "UTC")
         self.assertTrue((normalized["Volume"] == 1.0).all())
         self.assertTrue(normalized.index.is_monotonic_increasing)
         self.assertFalse(normalized.index.has_duplicates)
