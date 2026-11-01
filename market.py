@@ -14,8 +14,8 @@ warnings.filterwarnings('ignore')
 # Instruments are selected by their TradingView symbol (e.g. TVC:GOLD, BINANCE:BTCUSDT).
 from config import ASSETS
 try:
-    import dukascopy_python.compat as _duka
-    from dukascopy_python.compat import instruments as _duka_instruments
+    import dukascopy_python as _duka
+    from dukascopy_python import instruments as _duka_instruments
     _DUKA_IMPORT_ERROR = None
 except Exception as exc:
     _duka = None
@@ -204,7 +204,7 @@ def _dukascopy_interval(timeframe: str):
     if _duka is None or _duka_instruments is None:
         raise RuntimeError(
             f'مكتبة Dukascopy غير متاحة: {_DUKA_IMPORT_ERROR}. '
-            'تحقق من تثبيت dukascopy-python==5.0.0.'
+            'تحقق من تثبيت dukascopy-python==4.0.1.'
         )
     instrument = getattr(_duka_instruments, 'INSTRUMENT_FX_METALS_XAU_USD', None)
     if instrument is None:
