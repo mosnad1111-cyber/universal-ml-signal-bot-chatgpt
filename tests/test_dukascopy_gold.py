@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -40,6 +41,27 @@ class DukascopyGoldNormalizationTests(unittest.TestCase):
         normalized = market._normalize_dukascopy_gold(raw)
         self.assertEqual(len(normalized), 20)
         self.assertTrue((normalized["Volume"] == 1.0).all())
+
+
+    def test_recent_refresh_range_accepts_small_incremental_window(self):
+        raw = pd.DataFrame(
+            {
+                "open": [2700.0] * 30,
+                "high": [2701.0] * 30,
+                "low": [2699.0] * 30,
+                "close": [2700.5] * 30,
+            },
+            index=pd.date_range("2026-10-01", periods=30, freq="15min", tz="UTC"),
+        )
+        with patch.object(market, "_dukascopy_interval", return_value=("xau", "15m", "bid")), \
+             patch.object(market, "_duka", SimpleNamespace(fetch=lambda *args: raw)):
+            result = market._fetch_dukascopy_range(
+                "15m",
+                pd.Timestamp("2026-10-01T00:00:00Z"),
+                pd.Timestamp("2026-10-01T08:00:00Z"),
+            )
+        self.assertEqual(len(result), 30)
+        self.assertTrue((result["Volume"] == 1.0).all())
 
     def test_gold_fetch_uses_dukascopy_adapter(self):
         frame = pd.DataFrame(
