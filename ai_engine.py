@@ -154,7 +154,8 @@ class GoldAI:
         # model toward candles where both hypothetical trades resolved.
         valid_by_direction = {d: base_valid & labels[d].notna() for d in (1, 0)}
         all_valid_idx = base.index[valid_by_direction[1] | valid_by_direction[0]]
-        if len(all_valid_idx) < 300:
+        min_labeled_rows = 250
+        if len(all_valid_idx) < min_labeled_rows:
             self.errors[timeframe] = f'insufficient_training_rows:{len(all_valid_idx)}'; return False
 
         # Split by unique candle timestamp first. No future timestamp can enter
@@ -190,7 +191,7 @@ class GoldAI:
         # so every retrain failed even when both outcome classes were present.
         # Keep a conservative floor and require enough examples of each class;
         # validation may contain one class in a chronological fold.
-        min_train_rows = 300
+        min_train_rows = 200
         min_validation_rows = 40
         min_samples_per_class = 20
         class_counts = ytr.value_counts()
