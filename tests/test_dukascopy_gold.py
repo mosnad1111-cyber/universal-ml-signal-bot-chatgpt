@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -53,7 +54,7 @@ class DukascopyGoldNormalizationTests(unittest.TestCase):
             index=pd.date_range("2026-10-01", periods=30, freq="15min", tz="UTC"),
         )
         with patch.object(market, "_dukascopy_interval", return_value=("xau", "15m", "bid")), \
-             patch.object(market._duka, "fetch", return_value=raw):
+             patch.object(market, "_duka", SimpleNamespace(fetch=lambda *args: raw)):
             result = market._fetch_dukascopy_range(
                 "15m",
                 pd.Timestamp("2026-10-01T00:00:00Z"),
