@@ -263,11 +263,8 @@ def _fetch_dukascopy_range(timeframe: str, start: pd.Timestamp, end: pd.Timestam
         raise RuntimeError(f'Dukascopy لم يُرجع شموع XAU/USD للفريم {timeframe}.')
     merged = pd.concat(chunks)
     merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-    if len(merged) < 250:
-        raise RuntimeError(
-            f'Dukascopy XAU/USD {timeframe}: مجموع البيانات الصالحة {len(merged)} شمعة فقط؛ '
-            'يلزم 250 على الأقل.'
-        )
+    # This helper is also used for short rolling refresh windows. The caller
+    # validates the full merged history, not this small incremental slice.
     return merged
 
 
