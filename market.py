@@ -195,8 +195,8 @@ def _normalize_dukascopy_gold(raw: pd.DataFrame) -> pd.DataFrame:
     # intentionally NOT substituted for the previous neutral constant proxy.
     frame['Volume'] = 1.0
     frame = frame[['Open', 'High', 'Low', 'Close', 'Volume']]
-    if len(frame) < 250:
-        raise RuntimeError(f'Dukascopy أعاد {len(frame)} شمعة صالحة فقط؛ يلزم 250 على الأقل.')
+    # Monthly chunks can legitimately contain fewer than 250 bars (especially 1h).
+    # Validate the combined history after all chunks have been merged instead.
     return frame
 
 
@@ -263,6 +263,11 @@ def _fetch_dukascopy_range(timeframe: str, start: pd.Timestamp, end: pd.Timestam
         raise RuntimeError(f'Dukascopy لم يُرجع شموع XAU/USD للفريم {timeframe}.')
     merged = pd.concat(chunks)
     merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+    if len(merged) < 250:
+        raise RuntimeError(
+            f'Dukascopy XAU/USD {timeframe}: مجموع البيانات الصالحة {len(merged)} شمعة فقط؛ '
+            'يلزم 250 على الأقل.'
+        )
     return merged
 
 
