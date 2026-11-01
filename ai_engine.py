@@ -185,11 +185,26 @@ class GoldAI:
             self.errors[timeframe]='insufficient_temporal_split'; return False
         train=pd.concat(train_parts).sort_index(kind='stable'); val=pd.concat(val_parts).sort_index(kind='stable')
         Xtr=train[FEATURES]; ytr=train['_label']; Xv=val[FEATURES]; yv=val['_label']
-        if len(Xtr)<600 or len(Xv)<40 or ytr.nunique()<2:
+        # Strategy-specific labels are intentionally sparse. The old 600-row
+        # training gate rejected valid purged folds (350-596 rows in production),
+        # so every retrain failed even when both outcome classes were present.
+        # Keep a conservative floor and require enough examples of each class;
+        # validation may contain one class in a chronological fold.
+        min_train_rows = 300
+        min_validation_rows = 40
+        min_samples_per_class = 20
+        class_counts = ytr.value_counts()
+        min_class_count = int(class_counts.min()) if len(class_counts) else 0
+        if (
+            len(Xtr) < min_train_rows
+            or len(Xv) < min_validation_rows
+            or ytr.nunique() < 2
+            or min_class_count < min_samples_per_class
+        ):
             self.errors[timeframe] = (
-                f'invalid_training_distribution:train_rows={len(Xtr)} '
-                f'train_classes={ytr.nunique()} val_rows={len(Xv)} '
-                f'val_classes={yv.nunique()}'
+                f'insufficient_training_distribution:train_rows={len(Xtr)} '
+                f'train_classes={ytr.nunique()} min_class_rows={min_class_count} '
+                f'val_rows={len(Xv)} val_classes={yv.nunique()}'
             )
             return False
         # A chronological validation fold can legitimately contain one class,
