@@ -307,7 +307,9 @@ class GoldBacktest:
                 return {i: dict(p) for i, p in cached[1].items()}
             _PREDICTION_CACHE.pop(cache_key, None)
 
-        warmup = 700
+        # Strategy-specific labels are sparse; allow enough prequential history
+        # before the first model fit so the purged training fold is viable.
+        warmup = 1200
         step = max(200, int(retrain_every))
         predictions = {}
         model = None
