@@ -291,11 +291,13 @@ class Engine:
             timeouts = sum(r['result'] == 'TIMEOUT' for r in rows)
             profitable = 0
             losing = 0
+            valid_rows = 0
             net_r = 0.0
             for row in rows:
                 risk = abs(float(row['entry']) - float(row['sl']))
                 if risk <= 0:
                     continue
+                valid_rows += 1
                 if row['result'] == 'TP':
                     realized_r = abs(float(row['tp']) - float(row['entry'])) / risk
                 elif row['result'] == 'SL':
@@ -312,7 +314,7 @@ class Engine:
                     profitable += 1
                 elif realized_r < 0:
                     losing += 1
-            wr = 100 * profitable / len(rows) if rows else 0
+            wr = 100 * profitable / valid_rows if valid_rows else 0
             lines += [
                 '',
                 f'{asset["icon"]} <b>{asset["label"]}</b>',
@@ -329,7 +331,7 @@ class Engine:
                     lines.append(f'{tf}: {value.get("engine", "-")} | AUC {value.get("auc", 0):.3f} | Acc {value.get("accuracy", 0):.3f}')
                 else:
                     lines.append(f'{tf}: ❌ {ai.errors.get(tf, "غير متوفر")}')
-        return '\\n'.join(lines)
+        return '\n'.join(lines)
 
     def start(self):
         """Start the background market scanner and open-trade monitor."""
