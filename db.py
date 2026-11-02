@@ -13,6 +13,7 @@ class DB:
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);''')
             cols={r[1] for r in c.execute('PRAGMA table_info(signals)')}
             if 'features_json' not in cols: c.execute('ALTER TABLE signals ADD COLUMN features_json TEXT')
+            if 'activation_candle_time' not in cols: c.execute('ALTER TABLE signals ADD COLUMN activation_candle_time TEXT')
     def _conn(self):
         c=sqlite3.connect(self.path,timeout=30,check_same_thread=False); c.row_factory=sqlite3.Row; return c
     def create(self,s):
@@ -37,9 +38,11 @@ class DB:
         with self.lock:
             self._legacy_cleanup()
             with self._conn() as c:return c.execute("SELECT * FROM signals WHERE status IN ('WAITING','ACTIVE') ORDER BY id").fetchall()
-    def activate(self,sid,price):
+    def activate(self,sid,price,candle_time=None):
         now=datetime.now(timezone.utc).isoformat()
-        with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='ACTIVE',activated_at=?,entry_time=? WHERE id=? AND status='WAITING'",(now,now,sid))
+        with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='ACTIVE',activated_at=?,entry_time=?,activation_candle_time=? WHERE id=? AND status='WAITING'",(now,now,str(candle_time) if candle_time is not None else None,sid))
+    def set_activation_candle(self,sid,candle_time):
+        with self.lock,self._conn() as c:c.execute("UPDATE signals SET activation_candle_time=? WHERE id=? AND status='ACTIVE' AND activation_candle_time IS NULL",(str(candle_time),sid))
     def close(self,sid,result,price):
         now=datetime.now(timezone.utc).isoformat()
         with self.lock,self._conn() as c:c.execute("UPDATE signals SET status='CLOSED',result=?,closed_at=?,close_price=? WHERE id=? AND status IN ('WAITING','ACTIVE')",(result,now,price,sid))
