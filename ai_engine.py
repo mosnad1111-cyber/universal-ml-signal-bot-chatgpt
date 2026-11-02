@@ -154,9 +154,58 @@ class GoldAI:
         # model toward candles where both hypothetical trades resolved.
         valid_by_direction = {d: base_valid & labels[d].notna() for d in (1, 0)}
         all_valid_idx = base.index[valid_by_direction[1] | valid_by_direction[0]]
-        min_labeled_rows = 250
-        if len(all_valid_idx) < min_labeled_rows:
-            self.errors[timeframe] = f'insufficient_training_rows:{len(all_valid_idx)}'; return False
+        # In fast walk-forward mode, the caller supplies only history available
+        # at the fold's decision timestamp. Labels near the end remain NaN until
+        # their full outcome horizon matures, so these rows are safe to train on.
+        # Avoid a second internal split/purge: it needlessly removes valid rows
+        # from already-small strategy-specific folds. Normal/live fitting keeps
+        # its chronological validation and purge path below.
+        if fast_mode:
+            parts = []
+            for direction in (1, 0):
+                idx = base.index[valid_by_direction[direction]]
+                if len(idx):
+                    d = base.loc[idx].copy()
+                    d['direction'] = direction
+                    d['_label'] = labels[direction].loc[idx].astype(int).values
+                    parts.append(d)
+            if not parts:
+                self.errors[timeframe] = 'insufficient_training_rows:0'
+                return False
+            all_labeled = pd.concat(parts).sort_index(kind='stable')
+            yall = all_labeled['_label']
+            class_counts = yall.value_counts()
+            min_class_count = int(class_counts.min()) if len(class_counts) else 0
+            if len(all_labeled) < 160 or yall.nunique() < 2 or min_class_count < 20:
+                self.errors[timeframe] = (
+                    f'insufficient_training_distribution:rows={len(all_labeled)} '
+                    f'classes={yall.nunique()} min_class_rows={min_class_count}'
+                )
+                return False
+            Xall = all_labeled[FEATURES]
+            try:
+                from xgboost import XGBClassifier
+                model = XGBClassifier(n_estimators=350,max_depth=4,learning_rate=0.035,subsample=0.85,colsample_bytree=0.85,min_child_weight=6,reg_alpha=0.15,reg_lambda=2.0,objective='binary:logistic',eval_metric='logloss',tree_method='hist',random_state=42,n_jobs=1)
+                model.fit(Xall, yall)
+                engine = 'XGBoost'
+            except Exception as exc:
+                self.errors[timeframe] = f'XGBoost: {type(exc).__name__}: {exc}'
+                model=HistGradientBoostingClassifier(max_iter=250,learning_rate=0.045,max_leaf_nodes=15,l2_regularization=1.0,random_state=42)
+                model.fit(Xall, yall)
+                engine='HistGradientBoosting'
+            metrics = {
+                'engine': engine, 'training_rows': int(len(Xall)),
+                'deployment_training_rows': int(len(Xall)),
+                'training_candles': int(len(set(all_labeled.index))),
+                'deployment_training_candles': int(len(set(all_labeled.index))),
+                'fast_mode': True,
+                'training_class_counts': {str(k): int(v) for k, v in class_counts.items()},
+            }
+            if hasattr(model, 'feature_importances_'):
+                imp=np.asarray(model.feature_importances_,dtype=float)
+                metrics['top_features']=[{'feature':k,'importance':float(v)} for k,v in sorted(zip(FEATURES,imp),key=lambda z:z[1],reverse=True)[:10]]
+            self.models[timeframe]=model; self.metrics[timeframe]=metrics
+            self.trained_at[timeframe]=time.time(); self.errors.pop(timeframe,None); return True
 
         # Split by unique candle timestamp first. No future timestamp can enter
         # training, and BUY/SELL copies of one candle stay in the same split.
