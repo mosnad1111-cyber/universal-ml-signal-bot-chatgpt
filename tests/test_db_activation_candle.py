@@ -9,6 +9,7 @@ class ActivationCandlePersistenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = DB(os.path.join(self.tmp.name, 'signals.sqlite3'))
+        self.db.set_setting('signal_delivery_fix_v1', '1')
         self.signal = {
             'symbol': 'TVC:GOLD', 'timeframe': '5m', 'direction': 'BUY',
             'entry': 2000.0, 'sl': 1990.0, 'tp': 2020.0,
