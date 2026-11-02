@@ -176,10 +176,26 @@ class GoldAI:
             yall = all_labeled['_label']
             class_counts = yall.value_counts()
             min_class_count = int(class_counts.min()) if len(class_counts) else 0
-            if len(all_labeled) < 160 or yall.nunique() < 2 or min_class_count < 20:
+            unique_candles = int(all_labeled.index.nunique())
+            direction_counts = all_labeled['direction'].value_counts()
+            # Sparse strategy labels are generated only when the exact setup
+            # geometry is tradable and its Entry/SL/TP outcome is observable.
+            # A 160-row gate blocked balanced folds with 114-144 matured rows.
+            # Keep a conservative floor on total observations, distinct candles,
+            # and both outcome classes rather than fitting on tiny/imbalanced data.
+            min_fast_rows = 100
+            min_fast_candles = 50
+            min_fast_class_rows = 30
+            if (len(all_labeled) < min_fast_rows
+                    or unique_candles < min_fast_candles
+                    or yall.nunique() < 2
+                    or min_class_count < min_fast_class_rows):
                 self.errors[timeframe] = (
                     f'insufficient_training_distribution:rows={len(all_labeled)} '
-                    f'classes={yall.nunique()} min_class_rows={min_class_count}'
+                    f'candles={unique_candles} classes={yall.nunique()} '
+                    f'min_class_rows={min_class_count} '
+                    f'buy_rows={int(direction_counts.get(1, 0))} '
+                    f'sell_rows={int(direction_counts.get(0, 0))}'
                 )
                 return False
             Xall = all_labeled[FEATURES]
