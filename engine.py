@@ -172,6 +172,12 @@ class Engine:
             return 'TP'
         return None
 
+    @staticmethod
+    def _activation_bar_exit(direction, high, low, sl, tp):
+        hit_sl = low <= sl if direction == 'BUY' else high >= sl
+        hit_tp = high >= tp if direction == 'BUY' else low <= tp
+        return 'SL' if hit_sl or hit_tp else None
+
     def monitor(self):
         while not self.stop_event.is_set():
             for s in self.db.all_open():
@@ -198,7 +204,7 @@ class Engine:
                         # backtest's conservative ambiguous-entry treatment.
                         if activation_time in completed.index:
                             bar=completed.loc[activation_time]
-                            outcome=self._bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp']))
+                            outcome=self._activation_bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp']))
                             if outcome:
                                 price=float(s['sl'] if outcome=='SL' else s['tp'])
                                 self.db.close(s['id'],outcome,price)
@@ -221,7 +227,7 @@ class Engine:
                         for candle_time,bar in eligible.iterrows():
                             # The activation candle is always ambiguous: if an
                             # exit level is touched, score it as SL conservatively.
-                            result=self._bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp']))
+                            result=(self._activation_bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp'])) if candle_time == activation_time else self._bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp'])))
                             if result:
                                 outcome=result
                                 exit_price=float(s['sl'] if result=='SL' else s['tp'])
