@@ -161,27 +161,81 @@ class Engine:
                 lines.append('')
         return '\n'.join(lines)
 
+    @staticmethod
+    def _bar_exit(direction, high, low, sl, tp):
+        """Resolve one OHLC bar conservatively; SL wins if both levels are touched."""
+        hit_sl = low <= sl if direction == 'BUY' else high >= sl
+        hit_tp = high >= tp if direction == 'BUY' else low <= tp
+        if hit_sl:
+            return 'SL'
+        if hit_tp:
+            return 'TP'
+        return None
+
     def monitor(self):
         while not self.stop_event.is_set():
             for s in self.db.all_open():
                 try:
-                    symbol=s['symbol']; asset=next((a for a in ASSETS.values() if a['symbol']==symbol), {'label':symbol,'icon':'📈'})
+                    symbol=s['symbol']
+                    asset=next((a for a in ASSETS.values() if a['symbol']==symbol), {'label':symbol,'icon':'📈'})
                     df=fetch(symbol,s['timeframe'])
-                    if df is None or df.empty: continue
-                    high=float(df['High'].iloc[-1]); low=float(df['Low'].iloc[-1]); close=float(df['Close'].iloc[-1])
+                    if df is None or len(df)<2:
+                        continue
+                    # The last bar is still forming. Use it only to detect a
+                    # pending Entry touch; exits are resolved once its OHLC is final.
+                    completed=df.iloc[:-1]
                     if s['status']=='WAITING':
-                        if low<=s['entry']<=high:
-                            self.db.activate(s['id'],s['entry'])
-                            self.send(f'🟢 <b>تم تفعيل صفقة {asset["label"]}</b>\n\n⏱️ {s["timeframe"]}\n📍 الدخول: {self.fmt(s["entry"])}\n🛑 SL: {self.fmt(s["sl"])}\n🎯 TP: {self.fmt(s["tp"])}')
+                        after=pd.Timestamp(s['candle_time'])
+                        pending=df.loc[df.index > after]
+                        touched=pending[(pending['Low'] <= float(s['entry'])) & (pending['High'] >= float(s['entry']))]
+                        if touched.empty:
+                            continue
+                        activation_time=touched.index[0]
+                        self.db.activate(s['id'],s['entry'],activation_time.isoformat())
+                        self.send(f'🟢 <b>تم تفعيل صفقة {asset["label"]}</b>\\n\\n⏱️ {s["timeframe"]}\\n📍 الدخول: {self.fmt(s["entry"])}\\n🛑 SL: {self.fmt(s["sl"])}\\n🎯 TP: {self.fmt(s["tp"])}')
+                        # If the Entry candle has already closed, OHLC cannot
+                        # prove whether SL/TP happened before Entry. Match the
+                        # backtest's conservative ambiguous-entry treatment.
+                        if activation_time in completed.index:
+                            bar=completed.loc[activation_time]
+                            outcome=self._bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp']))
+                            if outcome:
+                                price=float(s['sl'] if outcome=='SL' else s['tp'])
+                                self.db.close(s['id'],outcome,price)
+                                self.send(f'❌ <b>إغلاق محافظ في شمعة الدخول — {asset["label"]}</b>\\nتم احتساب النتيجة {outcome} بسبب تعذّر معرفة ترتيب لمس الدخول ومستوى الخروج داخل الشمعة.')
                     elif s['status']=='ACTIVE':
-                        sl=low<=s['sl'] if s['direction']=='BUY' else high>=s['sl']; tp=high>=s['tp'] if s['direction']=='BUY' else low<=s['tp']
-                        if sl and tp:
-                            self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>إغلاق محافظ: SL — {asset["label"]}</b>\n⏱️ {s["timeframe"]}\n{asset["label"]} لمس SL وTP في نفس الشمعة؛ احتُسبت SL.')
-                        elif sl:
-                            self.db.close(s['id'],'SL',s['sl']); self.send(f'❌ <b>ضرب وقف الخسارة — {asset["label"]}</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["sl"])}')
-                        elif tp:
-                            self.db.close(s['id'],'TP',s['tp']); self.send(f'✅ <b>تحقق الهدف TP — {asset["label"]}</b>\n⏱️ {s["timeframe"]}\n💵 السعر: {self.fmt(s["tp"])}\n🎉 نتيجة: +{RR:g}R')
-                except Exception: traceback.print_exc()
+                        activation_time=s['activation_candle_time']
+                        if not activation_time:
+                            # Legacy active rows predate this field. Start
+                            # monitoring from the currently forming candle.
+                            activation_time=df.index[-1].isoformat()
+                            self.db.set_activation_candle(s['id'],activation_time)
+                            continue
+                        activation_time=pd.Timestamp(activation_time)
+                        eligible=completed.loc[completed.index >= activation_time]
+                        if eligible.empty:
+                            continue
+                        outcome=None
+                        exit_price=None
+                        exit_time=None
+                        for candle_time,bar in eligible.iterrows():
+                            # The activation candle is always ambiguous: if an
+                            # exit level is touched, score it as SL conservatively.
+                            result=self._bar_exit(s['direction'],float(bar['High']),float(bar['Low']),float(s['sl']),float(s['tp']))
+                            if result:
+                                outcome=result
+                                exit_price=float(s['sl'] if result=='SL' else s['tp'])
+                                exit_time=candle_time
+                                break
+                        if outcome:
+                            self.db.close(s['id'],outcome,exit_price)
+                            if outcome=='SL':
+                                self.send(f'❌ <b>ضرب وقف الخسارة — {asset["label"]}</b>\\n⏱️ {s["timeframe"]}\\n💵 السعر: {self.fmt(exit_price)}')
+                            else:
+                                self.send(f'✅ <b>تحقق الهدف TP — {asset["label"]}</b>\\n⏱️ {s["timeframe"]}\\n💵 السعر: {self.fmt(exit_price)}\\n🎉 نتيجة: +{RR:g}R')
+                except Exception as exc:
+                    print(f'[monitor] ERROR signal={s.get("id")}: {type(exc).__name__}: {exc}',flush=True)
+                    traceback.print_exc()
             time.sleep(MONITOR_SECONDS)
 
     def scanner(self):
