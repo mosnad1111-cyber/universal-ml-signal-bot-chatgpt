@@ -64,11 +64,27 @@ class Telegram:
             return bool(r.ok and r.json().get('ok'))
         except Exception: return False
 
+    def _authorized_chat(self,cid):
+        saved = None
+        if self.db:
+            try:
+                saved = self.db.get_setting('telegram_chat_id')
+            except Exception:
+                return False
+        if saved is None:
+            saved = self.chat_id
+        # First-contact pairing is allowed only when no chat is registered.
+        # Once paired, no other chat can silently take over notifications.
+        return saved is None or str(saved) == str(cid)
+
     def _remember_chat(self,cid):
+        if not self._authorized_chat(cid):
+            return False
         self.chat_id=cid
         if self.db:
             try: self.db.set_setting('telegram_chat_id',cid)
-            except Exception: pass
+            except Exception: return False
+        return True
 
     def _backtest(self,cid,asset_key='GOLD'):
         if self.backtest_running:
@@ -155,10 +171,14 @@ class Telegram:
                     self.offset=u['update_id']+1
                     msg=u.get('message')
                     if msg:
-                        cid=msg['chat']['id']; self._remember_chat(cid); self.send_menu(cid)
+                        cid=msg['chat']['id']
+                        if not self._authorized_chat(cid): continue
+                        self._remember_chat(cid); self.send_menu(cid)
                     cb=u.get('callback_query')
                     if cb:
-                        cid=cb['message']['chat']['id']; self._remember_chat(cid); data=cb.get('data','')
+                        cid=cb['message']['chat']['id']
+                        if not self._authorized_chat(cid): continue
+                        self._remember_chat(cid); data=cb.get('data','')
                         try: requests.post(self.base+'/answerCallbackQuery',json={'callback_query_id':cb['id']},timeout=10)
                         except Exception: pass
                         if data.startswith('scan:'):
