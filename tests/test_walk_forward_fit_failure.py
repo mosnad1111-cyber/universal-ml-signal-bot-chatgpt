@@ -32,8 +32,8 @@ class WalkForwardFitFailureTests(unittest.TestCase):
         FakeAI.first_fit_succeeds = False
         backtest._PREDICTION_CACHE.clear()
         self.frame = pd.DataFrame(
-            {"Close": [100.0] * 1000},
-            index=pd.date_range("2026-01-01", periods=1000, freq="5min", tz="UTC"),
+            {"Close": [100.0] * 1500},
+            index=pd.date_range("2026-01-01", periods=1500, freq="5min", tz="UTC"),
         )
 
     def test_failed_fits_are_reported_without_fake_probability_rows(self):
@@ -57,9 +57,9 @@ class WalkForwardFitFailureTests(unittest.TestCase):
 
         diagnostics = predictions["_diagnostics"]
         self.assertEqual(diagnostics["fit_failures"], 1)
-        self.assertIn(900, predictions)
-        self.assertEqual(predictions[900]["BUY"], 0.7)
-        self.assertEqual(predictions[900]["SELL"], 0.7)
+        self.assertIn(1400, predictions)
+        self.assertEqual(predictions[1400]["BUY"], 0.7)
+        self.assertEqual(predictions[1400]["SELL"], 0.7)
 
 
 if __name__ == "__main__":
