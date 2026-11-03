@@ -43,7 +43,11 @@ class WalkForwardFitFailureTests(unittest.TestCase):
             )
 
         diagnostics = predictions["_diagnostics"]
-        self.assertEqual(diagnostics["fit_failures"], 2)
+        # With no valid model yet, the runner retries every 100 bars
+        # (rather than waiting the full 200-bar normal retraining interval).
+        self.assertEqual(diagnostics["fit_failures"], 3)
+        self.assertEqual(diagnostics["initial_retry_interval"], 100)
+        self.assertEqual(diagnostics["regular_retrain_interval"], 200)
         self.assertEqual(diagnostics["last_fit_error"], "insufficient_training_rows:42")
         self.assertEqual(diagnostics["model_unavailable_candles"], 299)
         self.assertFalse(any(isinstance(key, int) for key in predictions))

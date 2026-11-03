@@ -16,6 +16,6 @@ jobs:
           python-version: "3.12"
           cache: "pip"
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip numpy pandas scikit-learn python-dotenv pytest
+        run: python -m pip install --upgrade pip numpy pandas scikit-learn python-dotenv requests pytest
       - name: Run regression tests
         run: python -m pytest -q
