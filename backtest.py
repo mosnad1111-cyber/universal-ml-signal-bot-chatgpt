@@ -311,6 +311,10 @@ class GoldBacktest:
         # before the first model fit so the purged training fold is viable.
         warmup = 1200
         step = max(200, int(retrain_every))
+        # If the first fit is not yet viable (common for sparse strategy labels),
+        # retry sooner instead of leaving the entire next 1000-bar block without
+        # predictions. Once a model exists, keep the configured regular cadence.
+        initial_retry_step = min(step, max(50, step // 10))
         predictions = {}
         model = None
         last_fit = -1
@@ -318,7 +322,8 @@ class GoldBacktest:
         fit_failures = 0
         last_fit_error = None
         for i in range(warmup, len(x) - 1):
-            if last_fit < 0 or i - last_fit >= step:
+            retry_interval = initial_retry_step if model is None else step
+            if last_fit < 0 or i - last_fit >= retry_interval:
                 candidate_model = GoldAI()
                 ok = candidate_model.fit(tf, x.iloc[:i], RR, divisor=DIVISOR,
                                          sl_atr_mult=SL_ATR_MULT, fast_mode=True,
@@ -345,6 +350,8 @@ class GoldBacktest:
         diagnostics = {
             'fit_attempts': fit_attempts,
             'fit_failures': fit_failures,
+            'initial_retry_interval': initial_retry_step,
+            'regular_retrain_interval': step,
             'last_fit_error': last_fit_error,
             'model_unavailable_candles': max(0, expected_predictions - len(predictions)),
         }
