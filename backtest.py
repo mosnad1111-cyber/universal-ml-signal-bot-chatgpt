@@ -314,7 +314,7 @@ class GoldBacktest:
         # If the first fit is not yet viable (common for sparse strategy labels),
         # retry sooner instead of leaving the entire next 1000-bar block without
         # predictions. Once a model exists, keep the configured regular cadence.
-        initial_retry_step = min(step, max(50, step // 10))
+        initial_retry_step = min(step, max(100, step // 10))
         predictions = {}
         model = None
         last_fit = -1
