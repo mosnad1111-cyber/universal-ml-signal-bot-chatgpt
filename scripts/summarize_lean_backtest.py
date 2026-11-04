@@ -43,14 +43,25 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN report instrument/timeframe mismatch.")
         expected_bars = int(report.get("bars", -1))
         received_bars = int(report.get("received_bars", -2))
+        reader_parsed = int(report.get("reader_parsed_rows", -1))
         reader_unique = int(report.get("reader_unique_timestamps", -1))
-        if reader_unique != expected_bars:
+        if reader_parsed != expected_bars or reader_unique != expected_bars:
             raise SystemExit(
-                f"{tf}: LEAN CSV reader parsed {reader_unique} unique timestamps "
-                f"for {expected_bars} prepared bars "
-                f"(parsed_rows={report.get('reader_parsed_rows')}, "
-                f"invalid_rows={report.get('reader_invalid_rows')})."
+                f"{tf}: LEAN CSV reader parsed {reader_parsed} rows / {reader_unique} "
+                f"unique timestamps for {expected_bars} prepared bars "
+                f"(invalid_rows={report.get('reader_invalid_rows')}, "
+                f"duplicate_rows={report.get('reader_duplicate_timestamps')}, "
+                f"source_requests={report.get('reader_source_requests')})."
             )
+        expected_daily = metadata.get("daily_bar_counts", {})
+        received_daily = report.get("reader_daily_counts", {})
+        if expected_daily != received_daily:
+            mismatches = {
+                day: {"prepared": expected_daily.get(day, 0), "reader": received_daily.get(day, 0)}
+                for day in sorted(set(expected_daily) | set(received_daily))
+                if expected_daily.get(day, 0) != received_daily.get(day, 0)
+            }
+            raise SystemExit(f"{tf}: LEAN per-day OHLC ingestion mismatch: {mismatches}")
         if expected_bars != received_bars:
             raise SystemExit(
                 f"{tf}: LEAN emitted {received_bars}/{expected_bars} prepared bars "
