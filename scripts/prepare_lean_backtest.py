@@ -56,7 +56,12 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             "period_minutes": PERIOD_MINUTES[tf],
         })
 
-    for day, rows in grouped.items():
+    first_day = _utc_naive(result["snapshot_start"]).date()
+    last_day = _utc_naive(result["snapshot_end"]).date()
+    day_cursor = first_day
+    while day_cursor <= last_day:
+        day = day_cursor.strftime("%Y%m%d")
+        rows = grouped.get(day, [])
         with (bars_dir / f"{day}.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
                 handle,
@@ -64,6 +69,7 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             )
             writer.writeheader()
             writer.writerows(rows)
+        day_cursor += timedelta(days=1)
 
     metadata = {
         "request_id": request_id,
