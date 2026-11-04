@@ -218,8 +218,10 @@ class LeanActionsClient:
                 raise LeanActionsError("Only manually dispatched LEAN runs are accepted.")
             expected_title = f"LEAN historical backtest {request_id}"
             display_title = run.get("display_title")
-            if display_title and display_title != expected_title:
+            if display_title != expected_title:
                 raise LeanActionsError("Run title does not match the Telegram request.")
+            if run.get("head_branch") != "main":
+                raise LeanActionsError("LEAN backtest must run from the main branch.")
             chat_id = pending.get("chat_id")
             if not chat_id or str(chat_id) != str(self.db.get_setting("telegram_chat_id", "")):
                 raise LeanActionsError("Telegram chat does not match the registered bot chat.")
@@ -247,11 +249,12 @@ class LeanActionsClient:
 
             if failure_detail:
                 message = (
-                    "❌ <b>فشل باكتيست LEAN الحقيقي.</b>\\n"
-                    f"المرحلة: {html.escape(failure_detail)}\\n"
+                    "❌ <b>فشل باكتيست LEAN الحقيقي.</b>\n"
+                    f"المرحلة: {html.escape(failure_detail)}\n"
                     f"<a href=\"{html.escape(run.get('html_url', ''), quote=True)}\">سجل التشغيل على GitHub</a>"
                 )
-                telegram.send(message, chat_id)
+                if not telegram.send(message, chat_id):
+                    raise LeanActionsError("تعذر إرسال إشعار فشل LEAN إلى Telegram.")
                 self.db.set_setting(f"lean_delivered:{run_id}", "1")
                 self.db.set_setting(pending_key, json.dumps({**pending, "status": "failed", "run_id": run_id}))
                 if self.db.get_setting("lean_active_request") == request_id:
@@ -281,7 +284,8 @@ class LeanActionsClient:
                     raise LeanActionsError("LEAN لم يستقبل جميع الشموع المجهزة.")
                 if report.get("order_errors"):
                     raise LeanActionsError("LEAN سجّل أخطاء في تنفيذ الأوامر.")
-            telegram.send_long(self.format_report(summary), chat_id)
+            if not telegram.send_long(self.format_report(summary), chat_id):
+                raise LeanActionsError("تعذر إرسال تقرير LEAN كاملًا إلى Telegram.")
             self.db.set_setting(f"lean_delivered:{run_id}", "1")
             self.db.set_setting(pending_key, json.dumps({**pending, "status": "completed", "run_id": run_id}))
             if self.db.get_setting("lean_active_request") == request_id:
