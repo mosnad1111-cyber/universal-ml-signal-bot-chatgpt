@@ -156,7 +156,8 @@ class LeanActionsClient:
             lines.extend([
                 f"⏱️ <b>{label}</b>",
                 f"المصدر: {source}",
-                f"الشموع الحقيقية الخام: {int(meta.get('raw_bars', 0)):,}",
+                f"الشموع المطلوبة: {int(meta.get('requested_bars', 0)):,}",
+                f"الشموع الخام المستلمة: {int(meta.get('raw_bars', 0)):,}",
                 f"الشموع المكتملة: {int(meta.get('completed_bars', 0)):,}",
                 f"الشموع المستخدمة بعد الميزات: {int(meta.get('usable_bars', 0)):,}",
                 f"الفترة UTC: {html.escape(str(meta.get('snapshot_start', '—')))} → {html.escape(str(meta.get('snapshot_end', '—')))}",
@@ -169,6 +170,8 @@ class LeanActionsClient:
                 f"Net: <b>{float(report.get('net_r', 0.0)):+.2f}R</b>",
                 f"إعدادات غير محسومة: {int(report.get('unresolved_trades', 0))} | غير مفعّلة: {int(report.get('unfilled_setups', 0))}",
             ])
+            if meta.get("history_partial"):
+                lines.append("⚠️ التاريخ المتاح أقل من العدد المطلوب؛ راجع أعداد الشموع أعلاه.")
             if volume_note:
                 lines.append(f"ملاحظة الحجم: {volume_note}")
             errors = report.get("order_errors") or []
