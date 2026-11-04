@@ -96,5 +96,85 @@ class LeanActionsTests(unittest.TestCase):
         self.assertIn("ليست عمولات وسيط فعلية", report)
 
 
+    def test_callback_accepts_uploaded_artifact_before_final_workflow_step_returns(self):
+        request_id = "b" * 32
+        db = FakeDB({
+            "telegram_chat_id": "12345",
+            "lean_active_request": request_id,
+            f"lean_request:{request_id}": json.dumps({
+                "chat_id": "12345", "asset_key": "GOLD", "timeframes": ["5m"],
+                "status": "dispatched",
+            }),
+        })
+        client = self.make_client(db=db)
+        run = {
+            "path": ".github/workflows/lean-real-backtest.yml",
+            "event": "workflow_dispatch",
+            "display_title": f"LEAN historical backtest {request_id}",
+            "head_branch": "main",
+            "status": "in_progress",
+            "conclusion": None,
+            "html_url": "https://github.com/owner/repo/actions/runs/123",
+        }
+        client._get_json = Mock(side_effect=[
+            run,
+            {"jobs": [{"steps": [{"name": "Upload report", "conclusion": "success"}]}]},
+        ])
+        client._read_artifact = Mock(return_value={
+            "synthetic_fixture": False,
+            "market_data_type": "real_historical_ohlc",
+            "asset_key": "GOLD",
+            "timeframes": [{
+                "metadata": {
+                    "timeframe": "5m", "market_data_source": "Dukascopy XAU/USD BID",
+                    "raw_bars": 1200,
+                },
+                "lean_report": {
+                    "bars": 1200, "received_bars": 1200,
+                    "order_errors": [], "trades": 0,
+                },
+            }],
+        })
+
+        class FakeTelegram:
+            def __init__(self):
+                self.sent = []
+            def send_long(self, text, chat_id):
+                self.sent.append((text, chat_id))
+                return True
+            def send(self, text, chat_id):
+                self.sent.append((text, chat_id))
+                return True
+
+        telegram = FakeTelegram()
+        result, status = client.handle_callback(123, request_id, telegram)
+        self.assertEqual(status, 200)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(telegram.sent), 1)
+        self.assertEqual(telegram.sent[0][1], "12345")
+        self.assertEqual(db.get_setting("lean_active_request"), "")
+        self.assertEqual(db.get_setting("lean_delivered:123"), "1")
+
+    def test_callback_rejects_non_matching_workflow_run_title(self):
+        request_id = "c" * 32
+        db = FakeDB({
+            "telegram_chat_id": "12345",
+            f"lean_request:{request_id}": json.dumps({
+                "chat_id": "12345", "asset_key": "BTC", "timeframes": ["1h"],
+            }),
+        })
+        client = self.make_client(db=db)
+        client._get_json = Mock(return_value={
+            "path": ".github/workflows/lean-real-backtest.yml",
+            "event": "workflow_dispatch",
+            "display_title": "LEAN historical backtest other-request",
+            "head_branch": "main",
+        })
+        result, status = client.handle_callback(123, request_id, Mock())
+        self.assertEqual(status, 500)
+        self.assertIn("Run title", result["error"])
+        self.assertEqual(db.get_setting("lean_delivered:123"), None)
+
+
 if __name__ == "__main__":
     unittest.main()
