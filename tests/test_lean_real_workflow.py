@@ -10,6 +10,8 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertIn("type: string", workflow)
         self.assertIn("5m,15m,1h", workflow)
         self.assertNotIn("type: choice", workflow)
+        self.assertIn("TF_LIST[@]", workflow)
+        self.assertIn("IFS=", workflow)
         self.assertIn("lean_smoke/LeanBacktestAlgorithm.py", workflow)
         self.assertIn("scripts/summarize_lean_backtest.py", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
