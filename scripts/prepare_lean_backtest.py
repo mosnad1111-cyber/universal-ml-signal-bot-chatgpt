@@ -39,6 +39,7 @@ def _utc_naive(value: str) -> datetime:
 
 def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, request_id: str):
     tf_dir = output / tf
+    tf_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
     daily_bar_counts: dict[str, int] = {}
