@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from QuantConnect import SubscriptionTransportMedium, TimeZones
 from QuantConnect.Data import FileFormat, SubscriptionDataSource
+from QuantConnect.Securities import SecurityExchangeHours, SymbolProperties
 from decimal import Decimal
 
 
@@ -17,6 +18,7 @@ READER_TIMESTAMPS = set()
 READER_SOURCE_DATES = set()
 READER_DAILY_COUNTS = {}
 DELIVERED_DAILY_COUNTS = {}
+DELIVERED_TIME_SAMPLES = []
 
 
 class CsvOhlcv(PythonData):
@@ -129,7 +131,20 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         # Each CSV row is already a complete OHLC bar with its true interval in
         # EndTime. Use tick-level delivery so LEAN does not quantize/coalesce
         # custom data to minute/hour subscription frontiers.
-        security = self.add_data(CsvOhlcv, "BOT_OHLCV", Resolution.TICK, TimeZones.UTC, False)
+        # The PyObject+timezone AddData overload can leave the custom security's
+        # exchange clock on New York in some LEAN Python bindings. Register both
+        # symbol properties and an explicitly UTC, always-open exchange-hours
+        # entry so the subscription data clock and exchange clock are identical.
+        properties = SymbolProperties.GetDefault("USD")
+        exchange_hours = SecurityExchangeHours.AlwaysOpen(TimeZones.UTC)
+        security = self.add_data(
+            CsvOhlcv,
+            "BOT_OHLCV",
+            properties,
+            exchange_hours,
+            Resolution.TICK,
+            False,
+        )
         self.symbol = security.symbol
         security.set_fill_model(TaggedPriceFillModel())
         security.set_fee_model(RiskBasedFeeModel())
@@ -249,6 +264,11 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         current = bar.time.replace(tzinfo=None)
         day = current.strftime("%Y%m%d")
         DELIVERED_DAILY_COUNTS[day] = DELIVERED_DAILY_COUNTS.get(day, 0) + 1
+        if len(DELIVERED_TIME_SAMPLES) < 5:
+            DELIVERED_TIME_SAMPLES.append({
+                "bar_time": current.isoformat(),
+                "algorithm_time": self.time.isoformat(),
+            })
         open_price = float(bar["Open"])
         high = float(bar["High"])
         low = float(bar["Low"])
@@ -330,6 +350,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "reader_source_dates": sorted(READER_SOURCE_DATES),
             "reader_daily_counts": dict(sorted(READER_DAILY_COUNTS.items())),
             "on_data_daily_counts": dict(sorted(DELIVERED_DAILY_COUNTS.items())),
+            "on_data_time_samples": list(DELIVERED_TIME_SAMPLES),
             "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),
