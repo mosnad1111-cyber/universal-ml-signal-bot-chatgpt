@@ -100,7 +100,8 @@ jobs:
           REQUEST_ID: ${{ inputs.request_id }}
         run: |
           python - <<'PY'
-          import json, os, pathlib
+          import csv, json, os, pathlib
+          from collections import Counter
           root = pathlib.Path(os.environ["OUTPUT_DIR"])
           prepared = json.loads((root / "prepared_summary.json").read_text())
           if prepared.get("request_id") != os.environ["REQUEST_ID"]:
@@ -117,6 +118,24 @@ jobs:
               folder = root / tf
               if not (folder / "metadata.json").is_file() or not (folder / "signals.json").is_file():
                   raise SystemExit(f"{tf}: LEAN input files are missing")
+              bars_file = folder / "bars.csv"
+              if not bars_file.is_file():
+                  raise SystemExit(f"{tf}: complete chronological OHLC stream is missing")
+              daily_counts = Counter()
+              rows = 0
+              previous = None
+              with bars_file.open(newline="", encoding="utf-8") as handle:
+                  for row in csv.DictReader(handle):
+                      stamp = row["time"]
+                      if previous is not None and stamp <= previous:
+                          raise SystemExit(f"{tf}: OHLC CSV timestamps are not strictly increasing")
+                      previous = stamp
+                      daily_counts[stamp[:10].replace("-", "")] += 1
+                      rows += 1
+              if rows != int(meta["bars_count"]):
+                  raise SystemExit(f"{tf}: serialized OHLC rows {rows} != prepared bars {meta['bars_count']}")
+              if dict(sorted(daily_counts.items())) != meta.get("daily_bar_counts"):
+                  raise SystemExit(f"{tf}: serialized per-day OHLC counts differ from preparation metadata")
           print("REAL_HISTORICAL_OHLC_INPUTS_VERIFIED")
           PY
 
@@ -198,6 +217,17 @@ jobs:
             --output-dir "$LEAN_DIR/report" \
             --request-id "$REQUEST_ID" \
             --asset "$ASSET"
+
+      - name: Upload LEAN diagnostics even when verification fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-diagnostics-${{ inputs.request_id }}
+          path: |
+            ${{ runner.temp }}/lean/input/
+            ${{ runner.temp }}/lean/results/
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Upload real historical LEAN report
         uses: actions/upload-artifact@v4
