@@ -38,6 +38,23 @@ jobs:
         with:
           ref: main
 
+      - name: Keep the Render bot awake during historical training and LEAN replay
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          KEEPALIVE_PID_FILE: ${{ runner.temp }}/lean-render-keepalive.pid
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="${CALLBACK_URL%/lean-backtest/callback}"
+          case "$BASE_URL" in https://*) ;; *) echo "Render callback must be HTTPS"; exit 1 ;; esac
+          nohup bash -c '
+            while true; do
+              curl --fail --silent --show-error --max-time 30 "$1/health" >/dev/null || true
+              sleep 300
+            done
+          ' _ "$BASE_URL" >"$RUNNER_TEMP/lean-render-keepalive.log" 2>&1 &
+          echo $! > "$KEEPALIVE_PID_FILE"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -224,3 +241,6 @@ jobs:
           else:
               raise SystemExit(f"Render callback failed after retries: {last}")
           PY
+          if [ -f "$RUNNER_TEMP/lean-render-keepalive.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/lean-render-keepalive.pid")" || true
+          fi
