@@ -271,7 +271,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         current = (
             algorithm_end
             - timedelta(minutes=period_minutes)
-            + timedelta(microseconds=1)
+            + timedelta(milliseconds=1)
         )
         raw_data_time = bar.time.replace(tzinfo=None)
         day = current.strftime("%Y%m%d")
