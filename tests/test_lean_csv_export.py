@@ -57,6 +57,28 @@ class LeanCsvExportTests(unittest.TestCase):
             {"20261102": 2, "20261103": 1},
         )
 
+    def test_export_rejects_signal_timestamp_without_matching_ohlc_candle(self):
+        bars = [{
+            "time": "2026-11-03T23:55:00+00:00",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 0.0,
+        }]
+        result = {
+            "market_bars": bars,
+            "lean_events": [{"signal_time": "2026-11-03T23:50:00+00:00"}],
+            "symbol": "XAUUSD",
+            "asset_label": "Gold",
+            "market_data_source": "Dukascopy XAU/USD BID historical OHLC",
+            "snapshot_start": bars[0]["time"],
+            "snapshot_end": bars[0]["time"],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(RuntimeError, "signal timestamps do not match"):
+                _write_timeframe(Path(temp_dir), "GOLD", "5m", result, "b" * 32)
+
 
 if __name__ == "__main__":
     unittest.main()
