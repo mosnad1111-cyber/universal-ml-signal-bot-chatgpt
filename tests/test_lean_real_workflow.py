@@ -44,6 +44,8 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertIn("emitted", summary)
         self.assertIn("daily_bar_counts", preparation)
         self.assertIn("daily_bar_counts", summary)
+        self.assertIn("market-data provenance", summary)
+        self.assertIn("trade ledger", summary)
         self.assertIn("Upload LEAN diagnostics even when verification fails", workflow)
         preparation = pathlib.Path("scripts/prepare_lean_backtest.py").read_text()
         for field in ("requested_bars", "raw_bars", "completed_bars", "usable_bars", "history_partial"):
