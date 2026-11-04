@@ -19,7 +19,7 @@ READER_DAILY_COUNTS = {}
 
 
 class CsvOhlcv(PythonData):
-    """Local daily OHLCV bars generated from the bot's completed market snapshot."""
+    """Local chronological OHLCV stream generated from the completed market snapshot."""
 
     def get_source(self, config, date, is_live_mode):
         # Use one chronological stream for the whole snapshot. LEAN changes its
@@ -107,7 +107,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
 
         start = self._parse_utc(self.metadata["start"])
         end = self._parse_utc(self.metadata["end"])
-        # Snapshot timestamps and daily CSV partitions are UTC. LEAN defaults
+        # Snapshot timestamps and the consolidated CSV stream are UTC. LEAN defaults
         # algorithm time to New York, which shifts the requested UTC file date
         # and can exclude midnight UTC bars from the backtest window.
         self.set_time_zone(TimeZones.UTC)
