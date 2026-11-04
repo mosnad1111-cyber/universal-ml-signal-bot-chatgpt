@@ -43,11 +43,17 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
     bars_dir.mkdir(parents=True, exist_ok=True)
 
     grouped: dict[str, list[dict]] = {}
-    for bar in result["market_bars"]:
-        stamp = _utc_naive(bar["time"])
+    stamps = [_utc_naive(bar["time"]) for bar in result["market_bars"]]
+    if any(right <= left for left, right in zip(stamps, stamps[1:])):
+        raise RuntimeError(f"{asset_key} {tf}: raw OHLC timestamps are not strictly increasing")
+    serialized_stamps = [stamp.isoformat(sep=" ", timespec="microseconds") for stamp in stamps]
+    if len(set(serialized_stamps)) != len(serialized_stamps):
+        raise RuntimeError(f"{asset_key} {tf}: duplicate timestamps would be written to LEAN CSV")
+
+    for bar, stamp in zip(result["market_bars"], stamps):
         day = stamp.strftime("%Y%m%d")
         grouped.setdefault(day, []).append({
-            "time": stamp.strftime("%Y%m%d %H:%M:%S"),
+            "time": stamp.isoformat(sep=" ", timespec="microseconds"),
             "open": bar["open"],
             "high": bar["high"],
             "low": bar["low"],
