@@ -12,17 +12,25 @@ from decimal import Decimal
 
 INPUT_DIR = "/Lean/Algorithm.Python/input"
 REPORT_PATH = "/Results/lean_report.json"
-READER_STATS = {"parsed_rows": 0, "invalid_rows": 0}
+READER_STATS = {"parsed_rows": 0, "invalid_rows": 0, "source_requests": 0}
 READER_TIMESTAMPS = set()
+READER_SOURCE_DATES = set()
+READER_DAILY_COUNTS = {}
 
 
 class CsvOhlcv(PythonData):
     """Local daily OHLCV bars generated from the bot's completed market snapshot."""
 
     def get_source(self, config, date, is_live_mode):
-        path = os.path.join(INPUT_DIR, "bars", date.strftime("%Y%m%d") + ".csv")
+        # Use one chronological stream for the whole snapshot. LEAN changes its
+        # daily source reader at exchange-date boundaries and may discard custom
+        # bars whose EndTime crosses that boundary. A single source avoids that
+        # rollover path without changing any market timestamps or OHLC values.
+        READER_STATS["source_requests"] += 1
+        READER_SOURCE_DATES.add(date.strftime("%Y%m%d"))
+        path = os.path.join(INPUT_DIR, "bars.csv")
         if not os.path.isfile(path):
-            raise FileNotFoundError(f"LEAN OHLC file not found for {date:%Y%m%d}: {path}")
+            raise FileNotFoundError(f"LEAN OHLC stream not found: {path}")
         return SubscriptionDataSource(path, SubscriptionTransportMedium.LOCAL_FILE, FileFormat.CSV)
 
     def data_time_zone(self):
@@ -45,6 +53,8 @@ class CsvOhlcv(PythonData):
 
         READER_STATS["parsed_rows"] += 1
         READER_TIMESTAMPS.add(stamp)
+        day = stamp.strftime("%Y%m%d")
+        READER_DAILY_COUNTS[day] = READER_DAILY_COUNTS.get(day, 0) + 1
         bar = CsvOhlcv()
         bar.symbol = config.symbol
         bar.time = stamp
@@ -296,6 +306,9 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "reader_invalid_rows": int(READER_STATS["invalid_rows"]),
             "reader_unique_timestamps": int(len(READER_TIMESTAMPS)),
             "reader_duplicate_timestamps": int(READER_STATS["parsed_rows"] - len(READER_TIMESTAMPS)),
+            "reader_source_requests": int(READER_STATS["source_requests"]),
+            "reader_source_dates": sorted(READER_SOURCE_DATES),
+            "reader_daily_counts": dict(sorted(READER_DAILY_COUNTS.items())),
             "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),
