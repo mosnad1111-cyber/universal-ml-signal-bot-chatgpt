@@ -161,6 +161,8 @@ class LeanActionsClient:
                 f"الشموع المكتملة: {int(meta.get('completed_bars', 0)):,}",
                 f"الشموع المستخدمة بعد الميزات: {int(meta.get('usable_bars', 0)):,}",
                 f"الفترة UTC: {html.escape(str(meta.get('snapshot_start', '—')))} → {html.escape(str(meta.get('snapshot_end', '—')))}",
+                f"آخر شمعة تاريخية: {html.escape(str(meta.get('end', '—')))}",
+                f"شموع اليوم UTC الحالي المستبعدة عمدًا: {int(meta.get('end_window_excluded_bars', 0))}",
                 f"إشارات XGBoost المقبولة: {int(meta.get('signals_count', 0))}",
                 f"الصفقات المنفذة داخل LEAN: {int(report.get('trades', 0))}",
                 f"الرابحة / الخاسرة: {int(report.get('wins', 0))} / {int(report.get('losses', 0))}",
@@ -194,6 +196,7 @@ class LeanActionsClient:
         lines.extend([
             "⚠️ رسوم LEAN هنا ناتجة عن افتراض التكلفة المحدد في التقرير (0.05R لكل صفقة ذهابًا وإيابًا)، وليست عمولات وسيط فعلية.",
             "⚠️ الذهب يستخدم شموع OHLC فعلية من Dukascopy، لكن Volume في تغذية المشروع قيمة محايدة وليست حجم تداول حقيقي.",
+            "ℹ️ تُستبعد شموع يوم UTC الحالي عمدًا لأن LEAN يقفل تاريخ النهاية عند آخر يوم مكتمل؛ تدريب XGBoost والتنفيذ داخل LEAN يستخدمان النافذة التاريخية نفسها.",
             "⚠️ هذا باكتيست تاريخي، وليس تنفيذًا حقيقيًا لدى وسيط أو ضمانًا للأرباح. اختبر على Paper Trading قبل أي تداول حي.",
         ])
         return "\n".join(lines)
