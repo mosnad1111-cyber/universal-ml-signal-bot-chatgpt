@@ -12,6 +12,8 @@ from decimal import Decimal
 
 INPUT_DIR = "/Lean/Algorithm.Python/input"
 REPORT_PATH = "/Results/lean_report.json"
+READER_STATS = {"parsed_rows": 0, "invalid_rows": 0}
+READER_TIMESTAMPS = set()
 
 
 class CsvOhlcv(PythonData):
@@ -31,17 +33,28 @@ class CsvOhlcv(PythonData):
             return None
         fields = next(csv.reader([line]))
         if len(fields) < 7:
+            READER_STATS["invalid_rows"] += 1
             return None
+        try:
+            stamp = datetime.fromisoformat(fields[0])
+            period_minutes = int(fields[6])
+            open_price, high, low, close, volume = map(float, fields[1:6])
+        except (TypeError, ValueError):
+            READER_STATS["invalid_rows"] += 1
+            return None
+
+        READER_STATS["parsed_rows"] += 1
+        READER_TIMESTAMPS.add(stamp)
         bar = CsvOhlcv()
         bar.symbol = config.symbol
-        bar.time = datetime.strptime(fields[0], "%Y%m%d %H:%M:%S")
-        bar.end_time = bar.time + timedelta(minutes=int(fields[6]))
-        bar.value = float(fields[4])
-        bar["Open"] = float(fields[1])
-        bar["High"] = float(fields[2])
-        bar["Low"] = float(fields[3])
-        bar["Close"] = float(fields[4])
-        bar["Volume"] = float(fields[5])
+        bar.time = stamp
+        bar.end_time = stamp + timedelta(minutes=period_minutes)
+        bar.value = close
+        bar["Open"] = open_price
+        bar["High"] = high
+        bar["Low"] = low
+        bar["Close"] = close
+        bar["Volume"] = volume
         return bar
 
 
@@ -93,8 +106,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         self.set_cash(100000)
 
         tf = self.metadata["timeframe"]
-        resolution = Resolution.HOUR if tf == "1h" else Resolution.MINUTE
-        security = self.add_data(CsvOhlcv, "BOT_OHLCV", resolution, TimeZones.UTC)
+        # Each CSV row is already a complete OHLC bar with its true interval in
+        # EndTime. Use tick-level delivery so LEAN does not quantize/coalesce
+        # custom data to minute/hour subscription frontiers.
+        security = self.add_data(CsvOhlcv, "BOT_OHLCV", Resolution.TICK, TimeZones.UTC, False)
         self.symbol = security.symbol
         security.set_fill_model(TaggedPriceFillModel())
         security.set_fee_model(RiskBasedFeeModel())
@@ -277,6 +292,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "market_data_source": self.metadata.get("market_data_source", ""),
             "bars": int(self.metadata["bars_count"]),
             "received_bars": int(self.received_bars),
+            "reader_parsed_rows": int(READER_STATS["parsed_rows"]),
+            "reader_invalid_rows": int(READER_STATS["invalid_rows"]),
+            "reader_unique_timestamps": int(len(READER_TIMESTAMPS)),
+            "reader_duplicate_timestamps": int(READER_STATS["parsed_rows"] - len(READER_TIMESTAMPS)),
             "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),
