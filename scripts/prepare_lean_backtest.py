@@ -53,6 +53,18 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
     if not result.get("market_bars"):
         raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
 
+    bar_timestamp_set = set(serialized_stamps)
+    signal_timestamps = [
+        _utc_naive(event["signal_time"]).isoformat(sep=" ", timespec="microseconds")
+        for event in result.get("lean_events", [])
+    ]
+    missing_signal_times = sorted(set(signal_timestamps) - bar_timestamp_set)
+    if missing_signal_times:
+        raise RuntimeError(
+            f"{asset_key} {tf}: XGBoost signal timestamps do not match source OHLC candles: "
+            f"{missing_signal_times[:5]}"
+        )
+
     for bar, stamp in zip(result["market_bars"], stamps):
         day = stamp.strftime("%Y%m%d")
         daily_bar_counts[day] = daily_bar_counts.get(day, 0) + 1
@@ -110,6 +122,7 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "usable_bars": int(result.get("usable_bars", 0)),
         "history_partial": bool(result.get("history_partial", False)),
         "signals_count": len(result["lean_events"]),
+        "signals_aligned_to_ohlc": True,
         "data_source": "real historical OHLC from the configured market-data provider",
         "market_data_source": market_data_source,
         "volume_note": (
