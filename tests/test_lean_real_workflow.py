@@ -12,6 +12,8 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.count("type: choice"), 1)  # asset selector only
         self.assertIn("TF_LIST[@]", workflow)
         self.assertIn("IFS=", workflow)
+        self.assertIn("sleep 300", workflow)
+        self.assertIn("/health", workflow)
         self.assertIn("lean_smoke/LeanBacktestAlgorithm.py", workflow)
         self.assertIn("scripts/summarize_lean_backtest.py", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
