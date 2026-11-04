@@ -56,3 +56,25 @@ are controlled by QuantConnect. No live-trading endpoints are used here.
 This first integration step deliberately does not replace the existing Backtest
 button or change live signals. Enable the API only after a valid project is
 available and its algorithm parity has been verified.
+
+
+## LEAN historical backtest from Telegram
+
+The Telegram menu has a separate **LEAN تاريخي حقيقي** action. The workflow fetches
+completed historical OHLC from the configured providers (Dukascopy XAU/USD BID for
+gold; Binance BTC/USDT klines, with the source recorded if TradingView fallback is
+used), builds chronological XGBoost Walk-Forward decisions, and sends only the
+market bars and decision levels to the open-source LEAN engine. LEAN independently
+replays entry/exit and order fees on those historical candles. The synthetic
+`lean_smoke` fixture is only a CI test and is never used by this Telegram workflow.
+
+To enable the action on Render, set `GITHUB_ACTIONS_TOKEN` to a fine-grained GitHub
+token scoped only to this repository with **Actions: Read and write** permission.
+The repository defaults to `mosnad1111-cyber/universal-ml-signal-bot-chatgpt`.
+Render provides `RENDER_EXTERNAL_URL` automatically; set `LEAN_CALLBACK_BASE_URL`
+only if you need to override it. Keep the token only in Render environment secrets.
+
+Gold OHLC is historical Dukascopy data, but its volume field is the project's
+constant neutral proxy and is not real traded volume. LEAN fees currently use a
+declared 0.05R round-trip assumption, not broker-specific commissions, spread or
+slippage. Results are research/backtest output, not broker execution.
