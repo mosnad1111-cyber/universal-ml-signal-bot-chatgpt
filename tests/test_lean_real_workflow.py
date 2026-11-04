@@ -31,6 +31,7 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertIn('"on_data_daily_counts"', lean_algorithm)
         self.assertIn("timedelta(microseconds=1)", lean_algorithm)
         self.assertIn("algorithm_end = self.time.replace(tzinfo=None)", lean_algorithm)
+        self.assertIn("timedelta(milliseconds=1)", lean_algorithm)
         self.assertIn("replay_bar_open_time", lean_algorithm)
         self.assertNotIn('current = bar.time.replace(tzinfo=None)', lean_algorithm)
         self.assertNotIn('INPUT_DIR, "bars", date.strftime', lean_algorithm)
