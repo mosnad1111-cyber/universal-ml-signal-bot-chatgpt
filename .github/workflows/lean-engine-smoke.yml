@@ -54,7 +54,47 @@ jobs:
               '"algorithm-language": "Python"',
           )
           config = re.sub(
-              r'(?m)^\s*//"algorithm-location":.*$',
+              r'(?m)^\s*"algorithm-location":.*
+          config = config.replace(
+              '"data-folder": "../../../Data/"',
+              '"data-folder": "/Data/"',
+          )
+          required = (
+              '"algorithm-type-name": "LeanSmokeAlgorithm"',
+              '"algorithm-language": "Python"',
+              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
+              '"data-folder": "/Data/"',
+          )
+          missing = [item for item in required if item not in config]
+          if missing:
+              raise SystemExit("LEAN config template changed; missing: " + repr(missing))
+          path.write_text(config, encoding="utf-8")
+          PY
+
+      - name: Pull the open-source LEAN engine image
+        run: docker pull quantconnect/lean:latest
+
+      - name: Run LEAN without QuantConnect Cloud or CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$RUNNER_TEMP/lean/Algorithm.Python:/Lean/Algorithm.Python:ro" \
+            --volume "$RUNNER_TEMP/lean/config.json:/Lean/Launcher/config.json:ro" \
+            --volume "$RUNNER_TEMP/lean/Data:/Data:ro" \
+            --volume "$RUNNER_TEMP/lean/Results:/Results" \
+            quantconnect/lean:latest \
+            --data-folder /Data \
+            --results-destination-folder /Results \
+            --config /Lean/Launcher/config.json 2>&1 | tee "$RUNNER_TEMP/lean/lean.log"
+
+      - name: Verify LEAN initialized and completed the Python algorithm
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "LEAN_SMOKE_INITIALIZED" "$RUNNER_TEMP/lean/lean.log"
+          grep -q "LEAN_SMOKE_COMPLETED" "$RUNNER_TEMP/lean/lean.log"
+,
               '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py",',
               config,
           )
