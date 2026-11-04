@@ -12,14 +12,9 @@ on:
           - GOLD
           - BTC
       timeframes:
-        description: Timeframes to backtest
+        description: "all or a comma-separated list such as 5m,15m,1h"
         required: true
-        type: choice
-        options:
-          - all
-          - 5m
-          - 15m
-          - 1h
+        type: string
       request_id:
         description: Telegram request correlation ID
         required: true
