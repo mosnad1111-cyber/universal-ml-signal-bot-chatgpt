@@ -171,10 +171,14 @@ jobs:
           mkdir -p "$LEAN_DIR/results"
           for tf in "${TF_LIST[@]}"; do
             mkdir -p "$LEAN_DIR/results/$tf"
+            # Keep source code and this timeframe's read-only inputs in one bind mount.
+            # A nested Docker mount cannot be created below a read-only parent mount.
+            rm -rf "$LEAN_DIR/Algorithm.Python/input"
+            mkdir -p "$LEAN_DIR/Algorithm.Python/input"
+            cp -a "$LEAN_DIR/input/$tf/." "$LEAN_DIR/Algorithm.Python/input/"
             docker run --rm --platform linux/arm64 \
               --volume "$LEAN_DIR/Algorithm.Python:/Lean/Algorithm.Python:ro" \
               --volume "$LEAN_DIR/config/lean.json:/Lean/Launcher/config.json:ro" \
-              --volume "$LEAN_DIR/input/$tf:/Lean/Algorithm.Python/input:ro" \
               --volume "$LEAN_DIR/results/$tf:/Results" \
               quantconnect/lean:latest \
               --results-destination-folder /Results \
