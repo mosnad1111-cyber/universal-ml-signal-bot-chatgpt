@@ -146,12 +146,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$TIMEFRAMES" = "all" ]; then
-            TF_LIST="5m 15m 1h"
+            TF_LIST=(5m 15m 1h)
           else
-            TF_LIST="$TIMEFRAMES"
+            IFS=',' read -r -a TF_LIST <<< "$TIMEFRAMES"
           fi
           mkdir -p "$LEAN_DIR/results"
-          for tf in $TF_LIST; do
+          for tf in "${TF_LIST[@]}"; do
             mkdir -p "$LEAN_DIR/results/$tf"
             docker run --rm --platform linux/arm64 \
               --volume "$LEAN_DIR/Algorithm.Python:/Lean/Algorithm.Python:ro" \
