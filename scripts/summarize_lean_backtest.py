@@ -34,6 +34,8 @@ def main() -> None:
             raise SystemExit(f"{tf}: source is not identified as a real market provider.")
         if int(metadata.get("raw_bars", 0)) < 1200 or int(metadata.get("usable_bars", 0)) < 1200:
             raise SystemExit(f"{tf}: insufficient real historical data.")
+        if metadata.get("signals_aligned_to_ohlc") is not True:
+            raise SystemExit(f"{tf}: XGBoost signal timestamps were not validated against original OHLC.")
         report_path = results_root / tf / "lean_report.json"
         if not report_path.is_file():
             raise SystemExit(f"{tf}: LEAN report is missing.")
