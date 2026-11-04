@@ -106,7 +106,7 @@ class Telegram:
             ],
         ]
         self.send(
-            f'🧪 <b>LEAN Backtest تاريخي — {asset["label"]}</b>\\n'
+            f'🧪 <b>LEAN Backtest تاريخي — {asset["label"]}</b>\n'
             'اختر الفريم. سيُجلب البوت شموع السوق التاريخية، ويعيد تدريب Walk-Forward، '
             'ثم يمرّر الشموع والإشارات إلى LEAN لمحاكاة الأوامر والرسوم.',
             cid,
@@ -140,10 +140,10 @@ class Telegram:
             self.backtest_running = True
             asset = ASSETS[asset_key]
             self.send(
-                f'🚀 <b>تم إرسال طلب LEAN الحقيقي إلى GitHub Actions</b>\\n'
-                f'الأصل: {asset["label"]}\\nالفريمات: {", ".join(timeframes)}\\n'
+                f'🚀 <b>تم إرسال طلب LEAN الحقيقي إلى GitHub Actions</b>\n'
+                f'الأصل: {asset["label"]}\nالفريمات: {", ".join(timeframes)}\n'
                 'سيتم جلب OHLC تاريخي فعلي من مزوّد السوق، وتشغيل XGBoost Walk-Forward، '
-                'ثم تنفيذ المحاكاة داخل LEAN. سيصل التقرير هنا عند اكتماله.\\n'
+                'ثم تنفيذ المحاكاة داخل LEAN. سيصل التقرير هنا عند اكتماله.\n'
                 'هذا المسار لا يستخدم شموع lean_smoke التجريبية.',
                 cid,
             )
@@ -154,7 +154,7 @@ class Telegram:
             self.backtest_running = False
             self.db.set_setting(f'lean_request:{request_id}', json.dumps({**record, 'status': 'dispatch_failed'}))
             self.db.set_setting('lean_active_request', '')
-            self.send('❌ <b>تعذر تشغيل LEAN.</b>\\n' + str(exc), cid)
+            self.send('❌ <b>تعذر تشغيل LEAN.</b>\n' + str(exc), cid)
 
     def handle_lean_callback(self, run_id, request_id):
         try:
