@@ -39,10 +39,9 @@ def _utc_naive(value: str) -> datetime:
 
 def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, request_id: str):
     tf_dir = output / tf
-    bars_dir = tf_dir / "bars"
-    bars_dir.mkdir(parents=True, exist_ok=True)
 
-    grouped: dict[str, list[dict]] = {}
+    rows: list[dict] = []
+    daily_bar_counts: dict[str, int] = {}
     stamps = [_utc_naive(bar["time"]) for bar in result["market_bars"]]
     if any(right <= left for left, right in zip(stamps, stamps[1:])):
         raise RuntimeError(f"{asset_key} {tf}: raw OHLC timestamps are not strictly increasing")
@@ -50,9 +49,13 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
     if len(set(serialized_stamps)) != len(serialized_stamps):
         raise RuntimeError(f"{asset_key} {tf}: duplicate timestamps would be written to LEAN CSV")
 
+    if not result.get("market_bars"):
+        raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
+
     for bar, stamp in zip(result["market_bars"], stamps):
         day = stamp.strftime("%Y%m%d")
-        grouped.setdefault(day, []).append({
+        daily_bar_counts[day] = daily_bar_counts.get(day, 0) + 1
+        rows.append({
             "time": stamp.isoformat(sep=" ", timespec="microseconds"),
             "open": bar["open"],
             "high": bar["high"],
@@ -62,28 +65,18 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             "period_minutes": PERIOD_MINUTES[tf],
         })
 
-    if not result.get("market_bars"):
-        raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
-    raw_start = _utc_naive(result["market_bars"][0]["time"])
-    raw_end = _utc_naive(result["market_bars"][-1]["time"])
-    first_day = raw_start.date()
-    last_day = raw_end.date()
-    day_cursor = first_day
-    # LEAN can request the UTC partition immediately after the final snapshot
-    # date while advancing its end-of-day frontier. Write an empty CSV for that
-    # boundary day instead of letting a missing file abort the entire feed.
-    final_partition_day = last_day + timedelta(days=1)
-    while day_cursor <= final_partition_day:
-        day = day_cursor.strftime("%Y%m%d")
-        rows = grouped.get(day, [])
-        with (bars_dir / f"{day}.csv").open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=("time", "open", "high", "low", "close", "volume", "period_minutes"),
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-        day_cursor += timedelta(days=1)
+    raw_start = stamps[0]
+    raw_end = stamps[-1]
+    bars_file = tf_dir / "bars.csv"
+    with bars_file.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("time", "open", "high", "low", "close", "volume", "period_minutes"),
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    if len(rows) != len(result["market_bars"]):
+        raise RuntimeError(f"{asset_key} {tf}: serialized OHLC row count changed unexpectedly")
 
     market_data_source = str(result.get("market_data_source") or "").strip()
     if not market_data_source:
@@ -104,6 +97,9 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "snapshot_end": result["snapshot_end"],
         "fee_r": 0.05,
         "bars_count": len(result["market_bars"]),
+        "bars_file": "bars.csv",
+        "partitioning": "single chronological CSV stream; UTC daily counts retained for validation",
+        "daily_bar_counts": dict(sorted(daily_bar_counts.items())),
         "requested_bars": int(result.get("requested_bars", len(result["market_bars"]))),
         "raw_bars": int(result.get("raw_bars", len(result["market_bars"]))),
         "completed_bars": int(result.get("completed_bars", len(result["market_bars"]))),
