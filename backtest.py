@@ -364,7 +364,7 @@ class GoldBacktest:
 
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
             min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL,
-            strategy='baseline', include_all_trades=False):
+            strategy='baseline', include_all_trades=False, include_lean_payload=False):
         started = time.time()
         requested_bars = self._requested_bars(tf, bars)
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
@@ -409,6 +409,7 @@ class GoldBacktest:
 
         warmup = 700
         trades = []
+        lean_events = []
         expired_unfilled = 0
         unresolved_at_end = 0
         strategy_filtered = 0
@@ -443,6 +444,20 @@ class GoldBacktest:
                 if ((tf == '15m' and DISABLE_15M_SIGNALS) or
                         (tf == '1h' and setup['direction'] == 'SELL' and DISABLE_1H_SELL_SIGNALS)):
                     live_config_filtered += 1
+                if include_lean_payload:
+                    # Export only the decision made at this candle close. LEAN
+                    # receives no Python-resolved outcome and must independently
+                    # determine entry, stop, target, and fills from subsequent bars.
+                    lean_events.append({
+                        'signal_time': row.name.isoformat(),
+                        'direction': setup['direction'],
+                        'entry': float(setup['entry']),
+                        'sl': float(setup['sl']),
+                        'tp': float(setup['tp']),
+                        'risk': abs(float(setup['entry']) - float(setup['sl'])),
+                        'score': float(setup['score']),
+                        'ai_prob': float(setup['ai_prob']),
+                    })
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
                 if result:
@@ -533,6 +548,19 @@ class GoldBacktest:
         }
         res['symbol'] = symbol
         res['asset_label'] = next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol)
+        if include_lean_payload:
+            res['lean_events'] = lean_events
+            res['market_bars'] = [
+                {
+                    'time': timestamp.isoformat(),
+                    'open': float(bar['Open']),
+                    'high': float(bar['High']),
+                    'low': float(bar['Low']),
+                    'close': float(bar['Close']),
+                    'volume': float(bar.get('Volume', 0.0)),
+                }
+                for timestamp, bar in raw.iterrows()
+            ]
         self.last[(symbol, tf)] = res
         return res
 
