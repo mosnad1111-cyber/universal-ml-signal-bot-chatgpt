@@ -1,6 +1,10 @@
 import time
 import threading
 import requests
+import json
+import uuid
+from datetime import datetime, timezone
+from lean_actions import LeanActionsClient
 from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
 from strategy_lab import StrategyResearchLab, STRATEGY_NAMES
@@ -10,6 +14,7 @@ class Telegram:
         self.token=TELEGRAM_BOT_TOKEN
         self.base=f'https://api.telegram.org/bot{self.token}' if self.token else ''
         self.db=db; self.chat_id=None; self.offset=0; self.engine=None; self.backtest_running=False
+        self.lean_client=LeanActionsClient(db)
         if self.db:
             saved=self.db.get_setting('telegram_chat_id')
             if saved:
@@ -18,12 +23,14 @@ class Telegram:
 
     def ready(self): return bool(self.base and self.chat_id)
 
-    def send(self,text,chat_id=None):
+    def send(self,text,chat_id=None,reply_markup=None):
         if not self.base: return False
         cid=chat_id or self.chat_id
         if not cid: return False
         try:
-            r=requests.post(self.base+'/sendMessage',json={'chat_id':cid,'text':text,'parse_mode':'HTML'},timeout=20)
+            payload={'chat_id':cid,'text':text,'parse_mode':'HTML'}
+            if reply_markup is not None: payload['reply_markup']=reply_markup
+            r=requests.post(self.base+'/sendMessage',json=payload,timeout=20)
             return bool(r.ok and r.json().get('ok'))
         except Exception: return False
 
@@ -50,6 +57,7 @@ class Telegram:
             [{'text':'🥇 الذهب 1h','callback_data':'scan:GOLD:1h'}, {'text':'₿ البيتكوين 1h','callback_data':'scan:BTC:1h'}],
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
+            [{'text':'⚙️ LEAN تاريخي حقيقي — الذهب','callback_data':'lean_menu:GOLD'}, {'text':'⚙️ LEAN تاريخي حقيقي — BTC','callback_data':'lean_menu:BTC'}],
             [{'text':'🔬 اختبار العتبات AI/Score','callback_data':'grid'}],
             [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
@@ -85,6 +93,80 @@ class Telegram:
             try: self.db.set_setting('telegram_chat_id',cid)
             except Exception: return False
         return True
+
+    def _lean_menu(self, cid, asset_key='GOLD'):
+        asset_key = asset_key if asset_key in ASSETS else 'GOLD'
+        asset = ASSETS[asset_key]
+        buttons = [
+            [{'text': 'كل الفريمات (5m + 15m + 1h)', 'callback_data': f'lean:{asset_key}:all'}],
+            [
+                {'text': '5m', 'callback_data': f'lean:{asset_key}:5m'},
+                {'text': '15m', 'callback_data': f'lean:{asset_key}:15m'},
+                {'text': '1h', 'callback_data': f'lean:{asset_key}:1h'},
+            ],
+        ]
+        self.send(
+            f'🧪 <b>LEAN Backtest تاريخي — {asset["label"]}</b>\n'
+            'اختر الفريم. سيُجلب البوت شموع السوق التاريخية، ويعيد تدريب Walk-Forward، '
+            'ثم يمرّر الشموع والإشارات إلى LEAN لمحاكاة الأوامر والرسوم.',
+            cid,
+            reply_markup={'inline_keyboard': buttons},
+        )
+
+    def _lean_backtest(self, cid, asset_key='GOLD', timeframe='all'):
+        if not self.db:
+            self.send('❌ تخزين طلب LEAN غير متاح في هذه الخدمة.', cid)
+            return
+        if self.backtest_running or self.db.get_setting('lean_active_request'):
+            self.send('⏳ يوجد Backtest آخر قيد التشغيل. انتظر التقرير قبل بدء طلب جديد.', cid)
+            return
+        if asset_key not in ASSETS:
+            self.send('❌ الأصل المحدد غير مدعوم.', cid)
+            return
+        timeframes = ['5m', '15m', '1h'] if timeframe == 'all' else [timeframe]
+        request_id = uuid.uuid4().hex
+        record = {
+            'request_id': request_id,
+            'chat_id': str(cid),
+            'asset_key': asset_key,
+            'timeframes': timeframes,
+            'status': 'queued',
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self.lean_client.validate_request(asset_key, timeframes)
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
+            self.db.set_setting('lean_active_request', request_id)
+            self.backtest_running = True
+            asset = ASSETS[asset_key]
+            self.send(
+                f'🚀 <b>تم إرسال طلب LEAN الحقيقي إلى GitHub Actions</b>\n'
+                f'الأصل: {asset["label"]}\nالفريمات: {", ".join(timeframes)}\n'
+                'سيتم جلب OHLC تاريخي فعلي من مزوّد السوق، وتشغيل XGBoost Walk-Forward، '
+                'ثم تنفيذ المحاكاة داخل LEAN. سيصل التقرير هنا عند اكتماله.\n'
+                'هذا المسار لا يستخدم شموع lean_smoke التجريبية.',
+                cid,
+            )
+            self.lean_client.dispatch(request_id, asset_key, timeframes)
+            record['status'] = 'dispatched'
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
+        except Exception as exc:
+            self.backtest_running = False
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps({**record, 'status': 'dispatch_failed'}))
+            self.db.set_setting('lean_active_request', '')
+            self.send('❌ <b>تعذر تشغيل LEAN.</b>\n' + str(exc), cid)
+
+    def handle_lean_callback(self, run_id, request_id):
+        try:
+            result, status = self.lean_client.handle_callback(run_id, request_id, self)
+            if status == 200:
+                self.backtest_running = False
+            elif status >= 500:
+                print(f'[lean-callback] delivery failed: {result}', flush=True)
+            return result, status
+        except Exception as exc:
+            print(f'[lean-callback] unhandled error: {type(exc).__name__}: {exc}', flush=True)
+            return {'ok': False, 'error': 'internal_error'}, 500
 
     def _backtest(self,cid,asset_key='GOLD'):
         if self.backtest_running:
@@ -200,6 +282,11 @@ class Telegram:
                             asset_key=data.split(':',1)[1] if ':' in data else 'GOLD'
                             self._backtest(cid,asset_key)
                         elif data=='grid': self._grid_search(cid)
+                        elif data.startswith('lean_menu:'):
+                            self._lean_menu(cid, data.split(':',1)[1].upper())
+                        elif data.startswith('lean:'):
+                            parts=data.split(':')
+                            if len(parts)==3: self._lean_backtest(cid, parts[1].upper(), parts[2])
                         elif data.startswith('lab:'):
                             asset_key = data.split(':', 1)[1].upper()
                             self._strategy_lab(cid, asset_key)

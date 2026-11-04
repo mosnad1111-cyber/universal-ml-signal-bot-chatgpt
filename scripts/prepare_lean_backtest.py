@@ -56,8 +56,12 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             "period_minutes": PERIOD_MINUTES[tf],
         })
 
-    first_day = _utc_naive(result["snapshot_start"]).date()
-    last_day = _utc_naive(result["snapshot_end"]).date()
+    if not result.get("market_bars"):
+        raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
+    raw_start = _utc_naive(result["market_bars"][0]["time"])
+    raw_end = _utc_naive(result["market_bars"][-1]["time"])
+    first_day = raw_start.date()
+    last_day = raw_end.date()
     day_cursor = first_day
     # LEAN can request the UTC partition immediately after the final snapshot
     # date while advancing its end-of-day frontier. Write an empty CSV for that
@@ -75,6 +79,10 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             writer.writerows(rows)
         day_cursor += timedelta(days=1)
 
+    market_data_source = str(result.get("market_data_source") or "").strip()
+    if not market_data_source:
+        raise RuntimeError(f"{asset_key} {tf}: market data provider was not identified")
+
     metadata = {
         "request_id": request_id,
         "asset_key": asset_key,
@@ -82,15 +90,25 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "asset_label": result["asset_label"],
         "timeframe": tf,
         "period_minutes": PERIOD_MINUTES[tf],
-        "start": result["snapshot_start"],
-        "end": result["snapshot_end"],
+        # LEAN must ingest the complete raw snapshot, including the warm-up bars
+        # before the first feature/prediction timestamp.
+        "start": raw_start.isoformat(),
+        "end": raw_end.isoformat(),
+        "snapshot_start": result["snapshot_start"],
+        "snapshot_end": result["snapshot_end"],
         "fee_r": 0.05,
         "bars_count": len(result["market_bars"]),
+        "requested_bars": int(result.get("requested_bars", len(result["market_bars"]))),
+        "raw_bars": int(result.get("raw_bars", len(result["market_bars"]))),
+        "completed_bars": int(result.get("completed_bars", len(result["market_bars"]))),
+        "usable_bars": int(result.get("usable_bars", 0)),
+        "history_partial": bool(result.get("history_partial", False)),
         "signals_count": len(result["lean_events"]),
-        "data_source": "same completed OHLC snapshot used by GoldBacktest",
+        "data_source": "real historical OHLC from the configured market-data provider",
+        "market_data_source": market_data_source,
         "volume_note": (
             "Gold volume is the existing neutral proxy and is not treated as real traded volume."
-            if asset_key == "GOLD" else "Binance reported base-asset volume."
+            if asset_key == "GOLD" else str(result.get("market_data_warning") or "Binance/TradingView historical volume; provider is identified above."),
         ),
     }
     (tf_dir / "metadata.json").write_text(

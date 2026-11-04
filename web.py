@@ -1,7 +1,7 @@
 import os
 import time
 import threading
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from config import ASSETS, GOLD_DATA_SYMBOL, TIMEFRAMES, DB_PATH, thresholds_for
 from telegram_ar import Telegram
 from engine import Engine
@@ -92,3 +92,14 @@ def diagnostics():
         'active_thresholds': active_thresholds(),
         'scans': scans,
     })
+
+
+@app.post('/lean-backtest/callback')
+def lean_backtest_callback():
+    payload = request.get_json(silent=True) or {}
+    request_id = str(payload.get('request_id') or '')
+    run_id = payload.get('run_id')
+    if not request_id or not str(run_id or '').isdigit():
+        return jsonify({'ok': False, 'error': 'request_id_and_run_id_required'}), 400
+    result, status = tg.handle_lean_callback(int(run_id), request_id)
+    return jsonify(result), status

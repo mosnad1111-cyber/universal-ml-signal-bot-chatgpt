@@ -1,0 +1,246 @@
+name: LEAN real market backtest
+run-name: LEAN historical backtest ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset:
+        description: Market asset
+        required: true
+        type: choice
+        options:
+          - GOLD
+          - BTC
+      timeframes:
+        description: "all or a comma-separated list such as 5m,15m,1h"
+        required: true
+        type: string
+      request_id:
+        description: Telegram request correlation ID
+        required: true
+        type: string
+      callback_url:
+        description: Render callback URL supplied by the bot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  real-historical-backtest:
+    # Public-repository hosted runners; official ARM64 LEAN image fits this runner.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Keep the Render bot awake during historical training and LEAN replay
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          KEEPALIVE_PID_FILE: ${{ runner.temp }}/lean-render-keepalive.pid
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="${CALLBACK_URL%/lean-backtest/callback}"
+          case "$BASE_URL" in https://*) ;; *) echo "Render callback must be HTTPS"; exit 1 ;; esac
+          nohup bash -c '
+            while true; do
+              curl --fail --silent --show-error --max-time 30 "$1/health" >/dev/null || true
+              sleep 300
+            done
+          ' _ "$BASE_URL" >"$RUNNER_TEMP/lean-render-keepalive.log" 2>&1 &
+          echo $! > "$KEEPALIVE_PID_FILE"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bot model and market-data dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Validate request and prepare real historical market candles
+        env:
+          ASSET: ${{ inputs.asset }}
+          TIMEFRAMES: ${{ inputs.timeframes }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          OUTPUT_DIR: ${{ runner.temp }}/lean/input
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re
+          asset = os.environ["ASSET"]
+          request_id = os.environ["REQUEST_ID"]
+          if asset not in {"GOLD", "BTC"}:
+              raise SystemExit("Unsupported asset")
+          if not re.fullmatch(r"[a-f0-9]{32}", request_id):
+              raise SystemExit("Invalid request ID")
+          PY
+          if [ "$TIMEFRAMES" = "all" ]; then
+            TF_LIST="5m,15m,1h"
+          else
+            TF_LIST="$TIMEFRAMES"
+          fi
+          python scripts/prepare_lean_backtest.py \
+            --asset "$ASSET" \
+            --timeframes "$TF_LIST" \
+            --request-id "$REQUEST_ID" \
+            --output-dir "$OUTPUT_DIR"
+
+      - name: Verify historical input is real, complete, and non-empty
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/lean/input
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ["OUTPUT_DIR"])
+          prepared = json.loads((root / "prepared_summary.json").read_text())
+          if prepared.get("request_id") != os.environ["REQUEST_ID"]:
+              raise SystemExit("Request ID mismatch in prepared market data")
+          for tf, item in prepared["timeframes"].items():
+              meta = item["metadata"]
+              source = str(meta.get("market_data_source", ""))
+              if not source or "synthetic" in source.lower():
+                  raise SystemExit(f"{tf}: real market-data provider was not identified")
+              if int(meta.get("raw_bars", 0)) < 1200 or int(meta.get("usable_bars", 0)) < 1200:
+                  raise SystemExit(f"{tf}: insufficient actual historical candles")
+              if int(meta.get("bars_count", 0)) <= 0 or int(meta.get("signals_count", 0)) < 0:
+                  raise SystemExit(f"{tf}: invalid prepared candle/signal counts")
+              folder = root / tf
+              if not (folder / "metadata.json").is_file() or not (folder / "signals.json").is_file():
+                  raise SystemExit(f"{tf}: LEAN input files are missing")
+          print("REAL_HISTORICAL_OHLC_INPUTS_VERIFIED")
+          PY
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force
+
+      - name: Prepare standalone LEAN runtime
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEAN_DIR/Algorithm.Python" "$LEAN_DIR/config"
+          cp lean_smoke/LeanBacktestAlgorithm.py "$LEAN_DIR/Algorithm.Python/"
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/QuantConnect/Lean/master/Launcher/config.json \
+            --output "$LEAN_DIR/config/lean.json"
+          python - "$LEAN_DIR/config/lean.json" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          config = path.read_text()
+          replacements = {
+              '"algorithm-type-name": "BasicTemplateFrameworkAlgorithm"':
+                  '"algorithm-type-name": "LeanBacktestAlgorithm"',
+              '"algorithm-language": "CSharp"': '"algorithm-language": "Python"',
+              '"algorithm-location": "QuantConnect.Algorithm.CSharp.dll"':
+                  '"algorithm-location": "../../../Algorithm.Python/LeanBacktestAlgorithm.py"',
+          }
+          for old, new in replacements.items():
+              if old not in config:
+                  raise SystemExit(f"LEAN config template changed; missing {old}")
+              config = config.replace(old, new, 1)
+          path.write_text(config)
+          PY
+
+      - name: Pull official LEAN engine
+        run: docker pull --platform linux/arm64 quantconnect/lean:latest
+
+      - name: Run LEAN against the real prepared candle history
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean
+          TIMEFRAMES: ${{ inputs.timeframes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$TIMEFRAMES" = "all" ]; then
+            TF_LIST=(5m 15m 1h)
+          else
+            IFS=',' read -r -a TF_LIST <<< "$TIMEFRAMES"
+          fi
+          mkdir -p "$LEAN_DIR/results"
+          for tf in "${TF_LIST[@]}"; do
+            mkdir -p "$LEAN_DIR/results/$tf"
+            docker run --rm --platform linux/arm64 \
+              --volume "$LEAN_DIR/Algorithm.Python:/Lean/Algorithm.Python:ro" \
+              --volume "$LEAN_DIR/config/lean.json:/Lean/Launcher/config.json:ro" \
+              --volume "$LEAN_DIR/input/$tf:/Lean/Algorithm.Python/input:ro" \
+              --volume "$LEAN_DIR/results/$tf:/Results" \
+              quantconnect/lean:latest \
+              --results-destination-folder /Results \
+              --config /Lean/Launcher/config.json 2>&1 | tee "$LEAN_DIR/results/$tf/lean-engine.log"
+            test -s "$LEAN_DIR/results/$tf/lean_report.json"
+          done
+
+      - name: Build verified historical report
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          python scripts/summarize_lean_backtest.py \
+            --prepared-dir "$LEAN_DIR/input" \
+            --results-dir "$LEAN_DIR/results" \
+            --output-dir "$LEAN_DIR/report" \
+            --request-id "$REQUEST_ID" \
+            --asset "$ASSET"
+
+      - name: Upload real historical LEAN report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-real-backtest-${{ inputs.request_id }}
+          path: ${{ runner.temp }}/lean/report/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Notify Render so the report is delivered to Telegram
+        if: always()
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          RUN_ID: ${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.parse
+          import requests
+          base = os.environ["CALLBACK_URL"].rstrip("/")
+          parsed = urllib.parse.urlparse(base)
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("Callback URL must use HTTPS")
+          payload = {
+              "request_id": os.environ["REQUEST_ID"],
+              "run_id": int(os.environ["RUN_ID"]),
+              "job_status": os.environ["JOB_STATUS"],
+          }
+          last = None
+          for attempt in range(8):
+              try:
+                  response = requests.post(
+                      base,
+                      json=payload,
+                      headers={"Content-Type": "application/json"},
+                      timeout=(10, 30),
+                  )
+                  if response.ok:
+                      print("Render accepted the verified workflow completion callback")
+                      break
+                  last = f"HTTP {response.status_code}: {response.text[:300]}"
+              except Exception as exc:
+                  last = f"{type(exc).__name__}: {exc}"
+              time.sleep(min(5 * (attempt + 1), 30))
+          else:
+              raise SystemExit(f"Render callback failed after retries: {last}")
+          PY
+          if [ -f "$RUNNER_TEMP/lean-render-keepalive.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/lean-render-keepalive.pid")" || true
+          fi

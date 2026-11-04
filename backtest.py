@@ -267,6 +267,8 @@ class GoldBacktest:
             _SNAPSHOT_CACHE.pop(cache_key, None)
 
         raw = fetch(symbol, tf, period=requested_bars)
+        market_data_source = str(raw.attrs.get('market_data_source', '')).strip()
+        market_data_warning = str(raw.attrs.get('market_data_warning', '')).strip()
         received_bars = len(raw)
         history_partial = received_bars < requested_bars
         if len(raw) > requested_bars:
@@ -282,6 +284,8 @@ class GoldBacktest:
             'requested_bars': requested_bars,
             'received_bars': received_bars,
             'history_partial': history_partial,
+            'market_data_source': market_data_source,
+            'market_data_warning': market_data_warning,
             'snapshot_id': snapshot_id,
             'snapshot_start': start,
             'snapshot_end': end,
@@ -510,6 +514,8 @@ class GoldBacktest:
             'raw_bars': prepared.get('received_bars', len(raw)),
             'completed_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
             'history_partial': history_partial,
+            'market_data_source': prepared.get('market_data_source', ''),
+            'market_data_warning': prepared.get('market_data_warning', ''),
             'model_fit_diagnostics': prediction_diagnostics,
             'snapshot_id': prepared.get('snapshot_id'),
             'snapshot_start': x.index[0].isoformat() if len(x) else None,

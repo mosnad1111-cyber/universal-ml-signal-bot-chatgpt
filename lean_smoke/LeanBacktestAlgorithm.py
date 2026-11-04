@@ -143,6 +143,13 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         return high >= float(event["sl"]), low <= float(event["tp"])
 
     @staticmethod
+    def _entry_touched(event, open_price, high, low):
+        entry = float(event["entry"])
+        if event["direction"] == "BUY":
+            return open_price <= entry or low <= entry
+        return open_price >= entry or high >= entry
+
+    @staticmethod
     def _entry_fill(event, open_price):
         entry = float(event["entry"])
         if event["direction"] == "BUY" and open_price <= entry:
@@ -224,7 +231,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             if current <= self._parse_utc(event["signal_time"]):
                 return
             entry = float(event["entry"])
-            if not (low <= entry <= high):
+            if not self._entry_touched(event, open_price, high, low):
                 return
 
             entry_fill = self._entry_fill(event, open_price)
@@ -267,6 +274,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "asset_key": self.metadata["asset_key"],
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
+            "market_data_source": self.metadata.get("market_data_source", ""),
             "bars": int(self.metadata["bars_count"]),
             "received_bars": int(self.received_bars),
             "lean_total_fees_usd": float(self.portfolio.total_fees),

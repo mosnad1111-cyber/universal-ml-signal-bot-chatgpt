@@ -329,6 +329,8 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     # Gold uses Dukascopy XAU/USD BID candles only; failures never fall back to another venue.
     if symbol == 'TVC:GOLD':
         df = _fetch_dukascopy_gold(timeframe, requested_bars)
+        df.attrs['market_data_source'] = 'Dukascopy XAU/USD BID historical OHLC'
+        df.attrs['market_data_warning'] = 'Volume is the existing constant neutral proxy, not traded volume.'
         with _cache_lock:
             _cache[cache_key] = (time.time(), df.copy())
         return df
@@ -339,6 +341,8 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
     if symbol == 'BINANCE:BTCUSDT':
         try:
             df = _fetch_binance_rest(timeframe, requested_bars)
+            df.attrs['market_data_source'] = 'Binance Spot REST BTC/USDT historical klines'
+            df.attrs['market_data_warning'] = 'Binance base-asset volume is provided for BTC/USDT.'
             with _cache_lock:
                 _cache[cache_key] = (time.time(), df.copy())
             return df
@@ -360,6 +364,12 @@ def fetch(symbol: str, timeframe: str, period=None) -> pd.DataFrame:
                         raise RuntimeError(f'رمز سوق غير مدعوم: {symbol}')
                     raw = tv.get_hist(symbol=asset['ticker'], exchange=asset['exchange'], interval=interval, n_bars=n_bars, extended_session=True)
                     df = _normalize_tv(raw)
+                    if symbol == 'BINANCE:BTCUSDT' and rest_error:
+                        df.attrs['market_data_source'] = 'TradingView historical BTC/USDT OHLC (Binance REST fallback)'
+                        df.attrs['market_data_warning'] = 'Volume semantics follow TradingView response; source fallback recorded.'
+                    else:
+                        df.attrs['market_data_source'] = f'TradingView historical OHLC: {symbol}'
+                        df.attrs['market_data_warning'] = 'Provider-reported volume; verify venue semantics before using volume metrics.'
                     with _cache_lock:
                         _cache[cache_key] = (time.time(), df.copy())
                     return df
