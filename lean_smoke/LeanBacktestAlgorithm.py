@@ -84,6 +84,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
 
         start = self._parse_utc(self.metadata["start"])
         end = self._parse_utc(self.metadata["end"])
+        # Snapshot timestamps and daily CSV partitions are UTC. LEAN defaults
+        # algorithm time to New York, which shifts the requested UTC file date
+        # and can exclude midnight UTC bars from the backtest window.
+        self.set_time_zone(TimeZones.UTC)
         self.set_start_date(start.year, start.month, start.day)
         self.set_end_date(end.year, end.month, end.day)
         self.set_cash(100000)
