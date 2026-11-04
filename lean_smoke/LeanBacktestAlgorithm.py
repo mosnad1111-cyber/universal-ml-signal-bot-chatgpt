@@ -261,13 +261,26 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         if bar is None:
             return
         self.received_bars += 1
-        current = bar.time.replace(tzinfo=None)
+        # LEAN delivers this custom OHLC point at its EndTime. The algorithm
+        # clock is UTC, so reconstruct the original bar OPEN timestamp from
+        # that delivery time and the declared interval. PythonData.Time can be
+        # converted through the security's exchange clock and must not be used
+        # to match the original UTC XGBoost signal_time.
+        algorithm_end = self.time.replace(tzinfo=None)
+        period_minutes = int(self.metadata["period_minutes"])
+        current = (
+            algorithm_end
+            - timedelta(minutes=period_minutes)
+            + timedelta(microseconds=1)
+        )
+        raw_data_time = bar.time.replace(tzinfo=None)
         day = current.strftime("%Y%m%d")
         DELIVERED_DAILY_COUNTS[day] = DELIVERED_DAILY_COUNTS.get(day, 0) + 1
         if len(DELIVERED_TIME_SAMPLES) < 5:
             DELIVERED_TIME_SAMPLES.append({
-                "bar_time": current.isoformat(),
-                "algorithm_time": self.time.isoformat(),
+                "raw_data_time": raw_data_time.isoformat(),
+                "replay_bar_open_time": current.isoformat(),
+                "algorithm_delivery_end_time": algorithm_end.isoformat(),
             })
         open_price = float(bar["Open"])
         high = float(bar["High"])
