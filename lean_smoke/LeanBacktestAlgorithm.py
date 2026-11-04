@@ -16,6 +16,7 @@ READER_STATS = {"parsed_rows": 0, "invalid_rows": 0, "source_requests": 0}
 READER_TIMESTAMPS = set()
 READER_SOURCE_DATES = set()
 READER_DAILY_COUNTS = {}
+DELIVERED_DAILY_COUNTS = {}
 
 
 class CsvOhlcv(PythonData):
@@ -58,7 +59,10 @@ class CsvOhlcv(PythonData):
         bar = CsvOhlcv()
         bar.symbol = config.symbol
         bar.time = stamp
-        bar.end_time = stamp + timedelta(minutes=period_minutes)
+        # EndTime is the last included instant of this OHLC interval. Keeping
+        # it one microsecond inside the bar prevents the final candle of a
+        # backtest day from ending just beyond LEAN's end-of-day frontier.
+        bar.end_time = stamp + timedelta(minutes=period_minutes) - timedelta(microseconds=1)
         bar.value = close
         bar["Open"] = open_price
         bar["High"] = high
@@ -243,6 +247,8 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             return
         self.received_bars += 1
         current = bar.time.replace(tzinfo=None)
+        day = current.strftime("%Y%m%d")
+        DELIVERED_DAILY_COUNTS[day] = DELIVERED_DAILY_COUNTS.get(day, 0) + 1
         open_price = float(bar["Open"])
         high = float(bar["High"])
         low = float(bar["Low"])
@@ -323,6 +329,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "reader_source_requests": int(READER_STATS["source_requests"]),
             "reader_source_dates": sorted(READER_SOURCE_DATES),
             "reader_daily_counts": dict(sorted(READER_DAILY_COUNTS.items())),
+            "on_data_daily_counts": dict(sorted(DELIVERED_DAILY_COUNTS.items())),
             "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),
