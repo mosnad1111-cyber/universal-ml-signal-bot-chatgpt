@@ -9,7 +9,7 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertIn("quantconnect/lean:latest", workflow)
         self.assertIn("type: string", workflow)
         self.assertIn("5m,15m,1h", workflow)
-        self.assertNotIn("type: choice", workflow)
+        self.assertEqual(workflow.count("type: choice"), 1)  # asset selector only
         self.assertIn("TF_LIST[@]", workflow)
         self.assertIn("IFS=", workflow)
         self.assertIn("lean_smoke/LeanBacktestAlgorithm.py", workflow)
