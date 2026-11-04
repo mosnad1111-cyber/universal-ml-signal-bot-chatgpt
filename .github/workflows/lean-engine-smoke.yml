@@ -142,6 +142,10 @@ jobs:
 
           report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
           assert report["bars"] == 5 and report["received_bars"] == 5, report
+          samples = report["on_data_time_samples"]
+          assert samples[0]["replay_bar_open_time"] == "2024-01-02T00:00:00", report
+          assert samples[-1]["replay_bar_open_time"] == "2024-01-03T23:55:00", report
+          assert report["on_data_daily_counts"] == {"20240102": 4, "20240103": 1}, report
           assert report["trades"] == 2, report
           assert [trade["result"] for trade in report["trades_detail"]] == ["TP", "SL"], report
           assert math.isclose(report["gross_r"], 1.0, abs_tol=1e-9), report
