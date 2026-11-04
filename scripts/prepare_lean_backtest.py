@@ -56,8 +56,12 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             "period_minutes": PERIOD_MINUTES[tf],
         })
 
-    first_day = _utc_naive(result["snapshot_start"]).date()
-    last_day = _utc_naive(result["snapshot_end"]).date()
+    if not result.get("market_bars"):
+        raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
+    raw_start = _utc_naive(result["market_bars"][0]["time"])
+    raw_end = _utc_naive(result["market_bars"][-1]["time"])
+    first_day = raw_start.date()
+    last_day = raw_end.date()
     day_cursor = first_day
     # LEAN can request the UTC partition immediately after the final snapshot
     # date while advancing its end-of-day frontier. Write an empty CSV for that
@@ -86,8 +90,12 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "asset_label": result["asset_label"],
         "timeframe": tf,
         "period_minutes": PERIOD_MINUTES[tf],
-        "start": result["snapshot_start"],
-        "end": result["snapshot_end"],
+        # LEAN must ingest the complete raw snapshot, including the warm-up bars
+        # before the first feature/prediction timestamp.
+        "start": raw_start.isoformat(),
+        "end": raw_end.isoformat(),
+        "snapshot_start": result["snapshot_start"],
+        "snapshot_end": result["snapshot_end"],
         "fee_r": 0.05,
         "bars_count": len(result["market_bars"]),
         "signals_count": len(result["lean_events"]),
