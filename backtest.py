@@ -39,7 +39,7 @@ class GoldBacktest:
         comparable = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
         return df.loc[comparable < cutoff].copy()
 
-    def _enrich(self, tf, x, symbol=GOLD_DATA_SYMBOL):
+    def _enrich(self, tf, x, symbol=GOLD_DATA_SYMBOL, end_before=None):
         x = x.copy()
         # Map each tested timeframe to the higher-timeframe context it needs.
         # 1m -> 5m/15m/1h, 5m -> 15m/1h, 15m -> 1h, 30m -> 1h.
@@ -58,7 +58,18 @@ class GoldBacktest:
                 x[prefix+'_dist_ema20'] = 0
                 continue
             try:
-                h = self._completed(add_features(fetch(symbol, htf)).dropna())
+                higher_timeframe_raw = fetch(symbol, htf)
+                if end_before is not None:
+                    # Keep higher-timeframe context inside the exact same
+                    # exclusive UTC window as the base candles. Otherwise 5m
+                    # features could leak current-day 15m/1h information even
+                    # when the exported 5m OHLC stream is correctly truncated.
+                    higher_timeframe_raw = self._before_exclusive_utc(
+                        higher_timeframe_raw, end_before
+                    )
+                else:
+                    higher_timeframe_raw = self._completed(higher_timeframe_raw)
+                h = add_features(higher_timeframe_raw).dropna()
                 h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
                 h['trend'] = 0
                 h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
@@ -77,7 +88,12 @@ class GoldBacktest:
                     x.sort_index(), h.sort_index(),
                     left_index=True, right_index=True, direction='backward'
                 )
-            except Exception:
+            except Exception as exc:
+                if end_before is not None:
+                    raise RuntimeError(
+                        f"Unable to prepare {htf} context for {tf} before UTC cutoff "
+                        f"{pd.Timestamp(end_before).isoformat()}: {type(exc).__name__}: {exc}"
+                    ) from exc
                 x[prefix+'_trend'] = 0
                 x[prefix+'_rsi'] = 50
                 x[prefix+'_macd_hist'] = 0
@@ -308,7 +324,7 @@ class GoldBacktest:
                 f"No completed historical candles remain before UTC cutoff {cutoff_key or 'unset'}"
             )
 
-        x = self._enrich(tf, add_features(raw).dropna(), symbol)
+        x = self._enrich(tf, add_features(raw).dropna(), symbol, end_before=cutoff)
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
         snapshot_id = f'{symbol}:{tf}:{requested_bars}:{len(raw)}:{start}:{end}:{cutoff_key}'
