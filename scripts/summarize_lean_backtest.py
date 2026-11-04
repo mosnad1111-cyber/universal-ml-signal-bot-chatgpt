@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,16 +42,35 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN report request ID mismatch.")
         if report.get("asset_key") != args.asset or report.get("timeframe") != tf:
             raise SystemExit(f"{tf}: LEAN report instrument/timeframe mismatch.")
+        if report.get("market_data_source") != source:
+            raise SystemExit(f"{tf}: LEAN report market-data provenance does not match prepared history.")
+        if int(report.get("signals", -1)) != int(metadata.get("signals_count", -2)):
+            raise SystemExit(f"{tf}: LEAN signal count differs from the prepared walk-forward signals.")
         expected_bars = int(report.get("bars", -1))
         received_bars = int(report.get("received_bars", -2))
+        reader_parsed = int(report.get("reader_parsed_rows", -1))
         reader_unique = int(report.get("reader_unique_timestamps", -1))
-        if reader_unique != expected_bars:
+        if int(report.get("reader_invalid_rows", -1)) != 0:
+            raise SystemExit(f"{tf}: LEAN rejected {report.get('reader_invalid_rows')} CSV rows.")
+        if int(report.get("reader_duplicate_timestamps", -1)) != 0:
+            raise SystemExit(f"{tf}: LEAN received duplicate OHLC timestamps.")
+        if reader_parsed != expected_bars or reader_unique != expected_bars:
             raise SystemExit(
-                f"{tf}: LEAN CSV reader parsed {reader_unique} unique timestamps "
-                f"for {expected_bars} prepared bars "
-                f"(parsed_rows={report.get('reader_parsed_rows')}, "
-                f"invalid_rows={report.get('reader_invalid_rows')})."
+                f"{tf}: LEAN CSV reader parsed {reader_parsed} rows / {reader_unique} "
+                f"unique timestamps for {expected_bars} prepared bars "
+                f"(invalid_rows={report.get('reader_invalid_rows')}, "
+                f"duplicate_rows={report.get('reader_duplicate_timestamps')}, "
+                f"source_requests={report.get('reader_source_requests')})."
             )
+        expected_daily = metadata.get("daily_bar_counts", {})
+        received_daily = report.get("reader_daily_counts", {})
+        if expected_daily != received_daily:
+            mismatches = {
+                day: {"prepared": expected_daily.get(day, 0), "reader": received_daily.get(day, 0)}
+                for day in sorted(set(expected_daily) | set(received_daily))
+                if expected_daily.get(day, 0) != received_daily.get(day, 0)
+            }
+            raise SystemExit(f"{tf}: LEAN per-day OHLC ingestion mismatch: {mismatches}")
         if expected_bars != received_bars:
             raise SystemExit(
                 f"{tf}: LEAN emitted {received_bars}/{expected_bars} prepared bars "
@@ -60,8 +80,32 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN input candle count differs from prepared history.")
         if report.get("order_errors"):
             raise SystemExit(f"{tf}: LEAN order execution errors: {report['order_errors']}")
-        if float(report.get("lean_total_fees_usd", 0.0)) < 0:
-            raise SystemExit(f"{tf}: invalid LEAN fee total.")
+        trade_details = report.get("trades_detail")
+        if not isinstance(trade_details, list) or int(report.get("trades", -1)) != len(trade_details):
+            raise SystemExit(f"{tf}: LEAN trade count does not match its executed trade ledger.")
+        try:
+            gross_sum = sum(float(trade["gross_r"]) for trade in trade_details)
+            fees_sum = sum(float(trade["fee_r"]) for trade in trade_details)
+            net_sum = sum(float(trade["net_r"]) for trade in trade_details)
+            gross_report = float(report["gross_r"])
+            fees_report = float(report["fees_r"])
+            net_report = float(report["net_r"])
+            total_fees_usd = float(report.get("lean_total_fees_usd", 0.0))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"{tf}: LEAN trade ledger or summary metrics are incomplete: {exc}")
+        metrics = (gross_sum, fees_sum, net_sum, gross_report, fees_report, net_report, total_fees_usd)
+        if not all(math.isfinite(value) for value in metrics) or total_fees_usd < 0:
+            raise SystemExit(f"{tf}: LEAN report contains non-finite or invalid fee/return values.")
+        if not (
+            math.isclose(gross_sum, gross_report, rel_tol=1e-9, abs_tol=1e-8)
+            and math.isclose(fees_sum, fees_report, rel_tol=1e-9, abs_tol=1e-8)
+            and math.isclose(net_sum, net_report, rel_tol=1e-9, abs_tol=1e-8)
+        ):
+            raise SystemExit(f"{tf}: LEAN return/fee totals do not reconcile with the executed trade ledger.")
+        wins = sum(float(trade["net_r"]) > 0 for trade in trade_details)
+        losses = sum(float(trade["net_r"]) < 0 for trade in trade_details)
+        if wins != int(report.get("wins", -1)) or losses != int(report.get("losses", -1)):
+            raise SystemExit(f"{tf}: LEAN win/loss totals do not reconcile with trade details.")
 
         out_dir = output_root / tf
         out_dir.mkdir(parents=True, exist_ok=True)
