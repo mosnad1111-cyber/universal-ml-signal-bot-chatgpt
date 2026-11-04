@@ -34,6 +34,8 @@ def main() -> None:
             raise SystemExit(f"{tf}: source is not identified as a real market provider.")
         if int(metadata.get("raw_bars", 0)) < 1200 or int(metadata.get("usable_bars", 0)) < 1200:
             raise SystemExit(f"{tf}: insufficient real historical data.")
+        if metadata.get("signals_aligned_to_ohlc") is not True:
+            raise SystemExit(f"{tf}: XGBoost signal timestamps were not validated against original OHLC.")
         report_path = results_root / tf / "lean_report.json"
         if not report_path.is_file():
             raise SystemExit(f"{tf}: LEAN report is missing.")
@@ -44,6 +46,17 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN report instrument/timeframe mismatch.")
         if report.get("market_data_source") != source:
             raise SystemExit(f"{tf}: LEAN report market-data provenance does not match prepared history.")
+        if report.get("history_end_utc") != metadata.get("end"):
+            raise SystemExit(f"{tf}: LEAN replay end timestamp differs from prepared Python history.")
+        if report.get("end_before_exclusive_utc") != metadata.get("end_before_exclusive_utc"):
+            raise SystemExit(f"{tf}: LEAN and Python use different UTC history cutoffs.")
+        if int(report.get("excluded_current_day_bars", -1)) != int(metadata.get("end_window_excluded_bars", -2)):
+            raise SystemExit(f"{tf}: current-day excluded candle count differs between preparation and LEAN.")
+        history_end = datetime.fromisoformat(str(metadata["end"]).replace("Z", "+00:00"))
+        if history_end.tzinfo is None:
+            history_end = history_end.replace(tzinfo=timezone.utc)
+        if history_end.date() >= datetime.now(timezone.utc).date():
+            raise SystemExit(f"{tf}: prepared LEAN history contains the current UTC day.")
         if int(report.get("signals", -1)) != int(metadata.get("signals_count", -2)):
             raise SystemExit(f"{tf}: LEAN signal count differs from the prepared walk-forward signals.")
         expected_bars = int(report.get("bars", -1))
@@ -70,7 +83,15 @@ def main() -> None:
                 for day in sorted(set(expected_daily) | set(received_daily))
                 if expected_daily.get(day, 0) != received_daily.get(day, 0)
             }
-            raise SystemExit(f"{tf}: LEAN per-day OHLC ingestion mismatch: {mismatches}")
+            raise SystemExit(f"{tf}: LEAN per-day CSV reader mismatch: {mismatches}")
+        delivered_daily = report.get("on_data_daily_counts", {})
+        if expected_daily != delivered_daily:
+            mismatches = {
+                day: {"prepared": expected_daily.get(day, 0), "on_data": delivered_daily.get(day, 0)}
+                for day in sorted(set(expected_daily) | set(delivered_daily))
+                if expected_daily.get(day, 0) != delivered_daily.get(day, 0)
+            }
+            raise SystemExit(f"{tf}: LEAN per-day OnData delivery mismatch: {mismatches}")
         if expected_bars != received_bars:
             raise SystemExit(
                 f"{tf}: LEAN emitted {received_bars}/{expected_bars} prepared bars "

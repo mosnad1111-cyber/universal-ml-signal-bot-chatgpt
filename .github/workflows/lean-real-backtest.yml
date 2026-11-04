@@ -102,12 +102,24 @@ jobs:
           python - <<'PY'
           import csv, json, os, pathlib
           from collections import Counter
+          from datetime import datetime, timezone
           root = pathlib.Path(os.environ["OUTPUT_DIR"])
           prepared = json.loads((root / "prepared_summary.json").read_text())
           if prepared.get("request_id") != os.environ["REQUEST_ID"]:
               raise SystemExit("Request ID mismatch in prepared market data")
+          utc_today = datetime.now(timezone.utc).date()
           for tf, item in prepared["timeframes"].items():
               meta = item["metadata"]
+              end = datetime.fromisoformat(str(meta["end"]).replace("Z", "+00:00"))
+              if end.tzinfo is None:
+                  end = end.replace(tzinfo=timezone.utc)
+              cutoff = datetime.fromisoformat(str(meta["end_before_exclusive_utc"]).replace("Z", "+00:00"))
+              if cutoff.tzinfo is None:
+                  cutoff = cutoff.replace(tzinfo=timezone.utc)
+              if end.date() >= utc_today or end >= cutoff:
+                  raise SystemExit(f"{tf}: prepared history includes the current UTC day or reaches its exclusive cutoff")
+              if int(meta.get("end_window_excluded_bars", -1)) < 0:
+                  raise SystemExit(f"{tf}: invalid count of excluded current-day candles")
               source = str(meta.get("market_data_source", ""))
               if not source or "synthetic" in source.lower():
                   raise SystemExit(f"{tf}: real market-data provider was not identified")

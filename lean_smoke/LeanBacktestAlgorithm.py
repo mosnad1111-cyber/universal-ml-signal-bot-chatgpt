@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from QuantConnect import SubscriptionTransportMedium, TimeZones
 from QuantConnect.Data import FileFormat, SubscriptionDataSource
+from QuantConnect.Securities import SecurityExchangeHours, SymbolProperties
 from decimal import Decimal
 
 
@@ -16,6 +17,8 @@ READER_STATS = {"parsed_rows": 0, "invalid_rows": 0, "source_requests": 0}
 READER_TIMESTAMPS = set()
 READER_SOURCE_DATES = set()
 READER_DAILY_COUNTS = {}
+DELIVERED_DAILY_COUNTS = {}
+DELIVERED_TIME_SAMPLES = []
 
 
 class CsvOhlcv(PythonData):
@@ -58,7 +61,10 @@ class CsvOhlcv(PythonData):
         bar = CsvOhlcv()
         bar.symbol = config.symbol
         bar.time = stamp
-        bar.end_time = stamp + timedelta(minutes=period_minutes)
+        # EndTime is the last included instant of this OHLC interval. Keeping
+        # it one microsecond inside the bar prevents the final candle of a
+        # backtest day from ending just beyond LEAN's end-of-day frontier.
+        bar.end_time = stamp + timedelta(minutes=period_minutes) - timedelta(microseconds=1)
         bar.value = close
         bar["Open"] = open_price
         bar["High"] = high
@@ -107,6 +113,12 @@ class LeanBacktestAlgorithm(QCAlgorithm):
 
         start = self._parse_utc(self.metadata["start"])
         end = self._parse_utc(self.metadata["end"])
+        current_utc_day = datetime.now(timezone.utc).date()
+        if end.date() >= current_utc_day:
+            raise ValueError(
+                f"Prepared LEAN history ends on {end.date()}, but LEAN only accepts "
+                f"completed days before current UTC day {current_utc_day}."
+            )
         # Snapshot timestamps and the consolidated CSV stream are UTC. LEAN defaults
         # algorithm time to New York, which shifts the requested UTC file date
         # and can exclude midnight UTC bars from the backtest window.
@@ -119,7 +131,20 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         # Each CSV row is already a complete OHLC bar with its true interval in
         # EndTime. Use tick-level delivery so LEAN does not quantize/coalesce
         # custom data to minute/hour subscription frontiers.
-        security = self.add_data(CsvOhlcv, "BOT_OHLCV", Resolution.TICK, TimeZones.UTC, False)
+        # The PyObject+timezone AddData overload can leave the custom security's
+        # exchange clock on New York in some LEAN Python bindings. Register both
+        # symbol properties and an explicitly UTC, always-open exchange-hours
+        # entry so the subscription data clock and exchange clock are identical.
+        properties = SymbolProperties.GetDefault("USD")
+        exchange_hours = SecurityExchangeHours.AlwaysOpen(TimeZones.UTC)
+        security = self.add_data(
+            CsvOhlcv,
+            "BOT_OHLCV",
+            properties,
+            exchange_hours,
+            Resolution.TICK,
+            False,
+        )
         self.symbol = security.symbol
         security.set_fill_model(TaggedPriceFillModel())
         security.set_fee_model(RiskBasedFeeModel())
@@ -138,6 +163,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         self.order_errors = []
         self.received_bars = 0
 
+        self.debug(
+            f"LEAN_HISTORY_WINDOW start={start.isoformat()} end={end.isoformat()} "
+            f"excluded_current_day_bars={self.metadata.get('end_window_excluded_bars', 0)}"
+        )
         self.debug("LEAN_BACKTEST_INITIALIZED")
 
     @staticmethod
@@ -232,7 +261,27 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         if bar is None:
             return
         self.received_bars += 1
-        current = bar.time.replace(tzinfo=None)
+        # LEAN delivers this custom OHLC point at its EndTime. The algorithm
+        # clock is UTC, so reconstruct the original bar OPEN timestamp from
+        # that delivery time and the declared interval. PythonData.Time can be
+        # converted through the security's exchange clock and must not be used
+        # to match the original UTC XGBoost signal_time.
+        algorithm_end = self.time.replace(tzinfo=None)
+        period_minutes = int(self.metadata["period_minutes"])
+        current = (
+            algorithm_end
+            - timedelta(minutes=period_minutes)
+            + timedelta(milliseconds=1)
+        )
+        raw_data_time = bar.time.replace(tzinfo=None)
+        day = current.strftime("%Y%m%d")
+        DELIVERED_DAILY_COUNTS[day] = DELIVERED_DAILY_COUNTS.get(day, 0) + 1
+        if len(DELIVERED_TIME_SAMPLES) < 5:
+            DELIVERED_TIME_SAMPLES.append({
+                "raw_data_time": raw_data_time.isoformat(),
+                "replay_bar_open_time": current.isoformat(),
+                "algorithm_delivery_end_time": algorithm_end.isoformat(),
+            })
         open_price = float(bar["Open"])
         high = float(bar["High"])
         low = float(bar["Low"])
@@ -300,6 +349,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
             "market_data_source": self.metadata.get("market_data_source", ""),
+            "history_start_utc": self.metadata.get("start", ""),
+            "history_end_utc": self.metadata.get("end", ""),
+            "end_before_exclusive_utc": self.metadata.get("end_before_exclusive_utc", ""),
+            "excluded_current_day_bars": int(self.metadata.get("end_window_excluded_bars", 0)),
             "bars": int(self.metadata["bars_count"]),
             "received_bars": int(self.received_bars),
             "reader_parsed_rows": int(READER_STATS["parsed_rows"]),
@@ -309,6 +362,8 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "reader_source_requests": int(READER_STATS["source_requests"]),
             "reader_source_dates": sorted(READER_SOURCE_DATES),
             "reader_daily_counts": dict(sorted(READER_DAILY_COUNTS.items())),
+            "on_data_daily_counts": dict(sorted(DELIVERED_DAILY_COUNTS.items())),
+            "on_data_time_samples": list(DELIVERED_TIME_SAMPLES),
             "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),

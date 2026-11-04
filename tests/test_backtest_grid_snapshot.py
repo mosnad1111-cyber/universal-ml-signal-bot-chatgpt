@@ -83,15 +83,15 @@ class GridSnapshotTests(unittest.TestCase):
             "Volume": [100.0, 110.0, 120.0, 130.0],
         }, index=index)
         with _CACHE_LOCK:
-            _SNAPSHOT_CACHE.pop(("1h", 321), None)
+            _SNAPSHOT_CACHE.pop(("TVC:GOLD", "1h", 321, None), None)
 
         with patch("backtest.fetch", return_value=frame), patch("backtest.add_features", side_effect=lambda df: df):
             first_bt = GoldBacktest()
-            first_bt._enrich = lambda tf, df, symbol=None: df
+            first_bt._enrich = lambda tf, df, symbol=None, end_before=None: df
             first = first_bt._prepare("1h", 321)
 
             second_bt = GoldBacktest()
-            second_bt._enrich = lambda tf, df, symbol=None: df
+            second_bt._enrich = lambda tf, df, symbol=None, end_before=None: df
             second = second_bt._prepare("1h", 321)
 
         self.assertFalse(first["snapshot_reused"])

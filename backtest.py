@@ -26,7 +26,20 @@ class GoldBacktest:
     def _completed(self, df):
         return df.iloc[:-1].copy() if len(df) > 1 else df
 
-    def _enrich(self, tf, x, symbol=GOLD_DATA_SYMBOL):
+    @staticmethod
+    def _before_exclusive_utc(df, end_before):
+        """Keep only candles whose timestamps are strictly before a UTC cutoff."""
+        cutoff = pd.Timestamp(end_before)
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.tz_localize("UTC")
+        else:
+            cutoff = cutoff.tz_convert("UTC")
+
+        index = pd.DatetimeIndex(df.index)
+        comparable = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
+        return df.loc[comparable < cutoff].copy()
+
+    def _enrich(self, tf, x, symbol=GOLD_DATA_SYMBOL, end_before=None):
         x = x.copy()
         # Map each tested timeframe to the higher-timeframe context it needs.
         # 1m -> 5m/15m/1h, 5m -> 15m/1h, 15m -> 1h, 30m -> 1h.
@@ -45,7 +58,18 @@ class GoldBacktest:
                 x[prefix+'_dist_ema20'] = 0
                 continue
             try:
-                h = self._completed(add_features(fetch(symbol, htf)).dropna())
+                higher_timeframe_raw = fetch(symbol, htf)
+                if end_before is not None:
+                    # Keep higher-timeframe context inside the exact same
+                    # exclusive UTC window as the base candles. Otherwise 5m
+                    # features could leak current-day 15m/1h information even
+                    # when the exported 5m OHLC stream is correctly truncated.
+                    higher_timeframe_raw = self._before_exclusive_utc(
+                        higher_timeframe_raw, end_before
+                    )
+                else:
+                    higher_timeframe_raw = self._completed(higher_timeframe_raw)
+                h = add_features(higher_timeframe_raw).dropna()
                 h = h[['ema20','ema50','ema200','rsi','macd_hist','dist_ema20']].copy()
                 h['trend'] = 0
                 h.loc[(h.ema20 > h.ema50) & (h.ema50 > h.ema200), 'trend'] = 1
@@ -64,7 +88,12 @@ class GoldBacktest:
                     x.sort_index(), h.sort_index(),
                     left_index=True, right_index=True, direction='backward'
                 )
-            except Exception:
+            except Exception as exc:
+                if end_before is not None:
+                    raise RuntimeError(
+                        f"Unable to prepare {htf} context for {tf} before UTC cutoff "
+                        f"{pd.Timestamp(end_before).isoformat()}: {type(exc).__name__}: {exc}"
+                    ) from exc
                 x[prefix+'_trend'] = 0
                 x[prefix+'_rsi'] = 50
                 x[prefix+'_macd_hist'] = 0
@@ -245,14 +274,21 @@ class GoldBacktest:
             '1h': BACKTEST_BARS_1H,
         }.get(tf, BACKTEST_BARS))
 
-    def _prepare(self, tf, requested_bars, symbol=GOLD_DATA_SYMBOL):
+    def _prepare(self, tf, requested_bars, symbol=GOLD_DATA_SYMBOL, end_before=None):
         """Fetch and prepare one cached, immutable market snapshot per timeframe.
 
-        Backtest and Grid Search actions often run in separate Telegram requests.
-        Reusing the same snapshot for 30 minutes makes their results directly
-        comparable instead of silently comparing different latest candles.
+        Optional end_before applies a strict UTC timestamp cutoff before feature
+        engineering. LEAN intentionally clamps SetEndDate to yesterday in the
+        algorithm timezone, so the real-LEAN workflow uses the start of today's
+        UTC day and builds Python predictions and LEAN inputs from that same
+        completed historical window.
         """
-        cache_key = (symbol, tf, int(requested_bars))
+        cutoff = None
+        if end_before is not None:
+            cutoff = pd.Timestamp(end_before)
+            cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
+        cutoff_key = cutoff.isoformat() if cutoff is not None else None
+        cache_key = (symbol, tf, int(requested_bars), cutoff_key)
         now = time.time()
         with _CACHE_LOCK:
             cached = _SNAPSHOT_CACHE.get(cache_key)
@@ -274,15 +310,31 @@ class GoldBacktest:
         if len(raw) > requested_bars:
             raw = raw.iloc[-requested_bars:].copy()
             received_bars = len(raw)
-        raw = self._completed(raw)
-        x = self._enrich(tf, add_features(raw).dropna(), symbol)
+
+        if cutoff is None:
+            raw = self._completed(raw)
+            end_window_excluded_bars = 0
+        else:
+            before_cutoff_count = len(raw)
+            raw = self._before_exclusive_utc(raw, cutoff)
+            end_window_excluded_bars = before_cutoff_count - len(raw)
+
+        if raw.empty:
+            raise RuntimeError(
+                f"No completed historical candles remain before UTC cutoff {cutoff_key or 'unset'}"
+            )
+
+        x = self._enrich(tf, add_features(raw).dropna(), symbol, end_before=cutoff)
         start = x.index[0].isoformat() if len(x) else None
         end = x.index[-1].isoformat() if len(x) else None
-        snapshot_id = f'{symbol}:{tf}:{requested_bars}:{len(raw)}:{start}:{end}'
-        prepared = {            'raw': raw.copy(),
+        snapshot_id = f'{symbol}:{tf}:{requested_bars}:{len(raw)}:{start}:{end}:{cutoff_key}'
+        prepared = {
+            'raw': raw.copy(),
             'features': x.copy(),
             'requested_bars': requested_bars,
             'received_bars': received_bars,
+            'end_window_excluded_bars': end_window_excluded_bars,
+            'end_before_exclusive_utc': cutoff_key,
             'history_partial': history_partial,
             'market_data_source': market_data_source,
             'market_data_warning': market_data_warning,
@@ -368,11 +420,14 @@ class GoldBacktest:
 
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
             min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL,
-            strategy='baseline', include_all_trades=False, include_lean_payload=False):
+            strategy='baseline', include_all_trades=False, include_lean_payload=False,
+            end_before=None):
         started = time.time()
         requested_bars = self._requested_bars(tf, bars)
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
-        prepared = _prepared if _prepared is not None else self._prepare(tf, requested_bars, symbol)
+        prepared = _prepared if _prepared is not None else self._prepare(
+            tf, requested_bars, symbol, end_before=end_before
+        )
         raw = prepared['raw']
         x = prepared['features']
         history_partial = prepared['history_partial']
@@ -382,6 +437,8 @@ class GoldBacktest:
                     'raw_bars':prepared.get('received_bars', len(raw)),
                     'completed_bars':len(raw), 'usable_bars':len(x),
                     'history_partial':history_partial,
+                    'end_window_excluded_bars': prepared.get('end_window_excluded_bars', 0),
+                    'end_before_exclusive_utc': prepared.get('end_before_exclusive_utc'),
                     'snapshot_id':prepared.get('snapshot_id'),
                     'snapshot_start':x.index[0].isoformat() if len(x) else None,
                     'snapshot_end':x.index[-1].isoformat() if len(x) else None,
@@ -400,7 +457,10 @@ class GoldBacktest:
                 'strategy': strategy, 'requested_bars': requested_bars,
                 'raw_bars': prepared.get('received_bars', len(raw)),
                 'completed_bars': len(raw), 'usable_bars': len(x),
-                'history_partial': history_partial, 'snapshot_id': prepared.get('snapshot_id'),
+                'history_partial': history_partial,
+                'end_window_excluded_bars': prepared.get('end_window_excluded_bars', 0),
+                'end_before_exclusive_utc': prepared.get('end_before_exclusive_utc'),
+                'snapshot_id': prepared.get('snapshot_id'),
                 'snapshot_start': x.index[0].isoformat() if len(x) else None,
                 'snapshot_end': x.index[-1].isoformat() if len(x) else None,
                 'model_fit_diagnostics': prediction_diagnostics,
@@ -514,6 +574,8 @@ class GoldBacktest:
             'raw_bars': prepared.get('received_bars', len(raw)),
             'completed_bars': len(raw), 'usable_bars': len(x), 'bars': len(x),
             'history_partial': history_partial,
+            'end_window_excluded_bars': prepared.get('end_window_excluded_bars', 0),
+            'end_before_exclusive_utc': prepared.get('end_before_exclusive_utc'),
             'market_data_source': prepared.get('market_data_source', ''),
             'market_data_warning': prepared.get('market_data_warning', ''),
             'model_fit_diagnostics': prediction_diagnostics,

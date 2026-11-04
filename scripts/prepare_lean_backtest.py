@@ -53,6 +53,18 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
     if not result.get("market_bars"):
         raise RuntimeError(f"{asset_key} {tf}: no raw historical OHLC bars were exported")
 
+    bar_timestamp_set = set(serialized_stamps)
+    signal_timestamps = [
+        _utc_naive(event["signal_time"]).isoformat(sep=" ", timespec="microseconds")
+        for event in result.get("lean_events", [])
+    ]
+    missing_signal_times = sorted(set(signal_timestamps) - bar_timestamp_set)
+    if missing_signal_times:
+        raise RuntimeError(
+            f"{asset_key} {tf}: XGBoost signal timestamps do not match source OHLC candles: "
+            f"{missing_signal_times[:5]}"
+        )
+
     for bar, stamp in zip(result["market_bars"], stamps):
         day = stamp.strftime("%Y%m%d")
         daily_bar_counts[day] = daily_bar_counts.get(day, 0) + 1
@@ -100,6 +112,9 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "bars_count": len(result["market_bars"]),
         "bars_file": "bars.csv",
         "partitioning": "single chronological CSV stream; UTC daily counts retained for validation",
+        "end_before_exclusive_utc": result.get("end_before_exclusive_utc"),
+        "end_window_excluded_bars": int(result.get("end_window_excluded_bars", 0)),
+        "lean_end_policy": "Only candles strictly before the current UTC day are exported because LEAN clamps SetEndDate to yesterday; Python training and LEAN replay use this identical window.",
         "daily_bar_counts": dict(sorted(daily_bar_counts.items())),
         "requested_bars": int(result.get("requested_bars", len(result["market_bars"]))),
         "raw_bars": int(result.get("raw_bars", len(result["market_bars"]))),
@@ -107,6 +122,7 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "usable_bars": int(result.get("usable_bars", 0)),
         "history_partial": bool(result.get("history_partial", False)),
         "signals_count": len(result["lean_events"]),
+        "signals_aligned_to_ohlc": True,
         "data_source": "real historical OHLC from the configured market-data provider",
         "market_data_source": market_data_source,
         "volume_note": (
@@ -157,6 +173,12 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     summaries = {}
     backtest = GoldBacktest()
+    # LEAN's SetEndDate deliberately clamps to yesterday in the algorithm
+    # timezone. Exclude the current UTC day before feature engineering so the
+    # XGBoost walk-forward signals, Python baseline, and LEAN replay all use
+    # exactly the same fully completed historical window.
+    end_before = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    print(f"[prepare] LEAN history cutoff (exclusive UTC): {end_before.isoformat()}", flush=True)
 
     for tf in timeframes:
         requested = TIMEFRAME_BARS[tf]
@@ -168,6 +190,7 @@ def main():
             symbol=asset["symbol"],
             include_all_trades=True,
             include_lean_payload=True,
+            end_before=end_before,
         )
         if result.get("error"):
             raise RuntimeError(f"{args.asset} {tf} preparation failed: {result['error']}")
@@ -183,7 +206,8 @@ def main():
         print(
             f"[prepare] {tf}: bars={metadata['bars_count']} "
             f"signals={metadata['signals_count']} "
-            f"python_trades={result.get('trades', 0)}",
+            f"python_trades={result.get('trades', 0)} "
+            f"excluded_current_day_bars={metadata['end_window_excluded_bars']}",
             flush=True,
         )
 
