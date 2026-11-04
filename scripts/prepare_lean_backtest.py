@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backtest import GoldBacktest
@@ -111,7 +111,7 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "market_data_source": market_data_source,
         "volume_note": (
             "Gold volume is the existing neutral proxy and is not treated as real traded volume."
-            if asset_key == "GOLD" else str(result.get("market_data_warning") or "Binance/TradingView historical volume; provider is identified above."),
+            if asset_key == "GOLD" else str(result.get("market_data_warning") or "Binance/TradingView historical volume; provider is identified above.")
         ),
     }
     (tf_dir / "metadata.json").write_text(
