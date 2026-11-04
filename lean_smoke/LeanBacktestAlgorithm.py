@@ -5,6 +5,8 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from QuantConnect import SubscriptionTransportMedium, TimeZones
+from QuantConnect.Data import FileFormat, SubscriptionDataSource
 from decimal import Decimal
 
 
@@ -17,7 +19,12 @@ class CsvOhlcv(PythonData):
 
     def get_source(self, config, date, is_live_mode):
         path = os.path.join(INPUT_DIR, "bars", date.strftime("%Y%m%d") + ".csv")
-        return SubscriptionDataSource(path)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"LEAN OHLC file not found for {date:%Y%m%d}: {path}")
+        return SubscriptionDataSource(path, SubscriptionTransportMedium.LOCAL_FILE, FileFormat.CSV)
+
+    def data_time_zone(self):
+        return TimeZones.UTC
 
     def reader(self, config, line, date, is_live_mode):
         if not line or line.startswith("time,"):
@@ -100,6 +107,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         self.unfilled = 0
         self.unresolved = 0
         self.order_errors = []
+        self.received_bars = 0
 
         self.debug("LEAN_BACKTEST_INITIALIZED")
 
@@ -187,6 +195,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         bar = data.get(self.symbol)
         if bar is None:
             return
+        self.received_bars += 1
         current = bar.time.replace(tzinfo=None)
         open_price = float(bar["Open"])
         high = float(bar["High"])
@@ -255,6 +264,8 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
             "bars": int(self.metadata["bars_count"]),
+            "received_bars": int(self.received_bars),
+            "lean_total_fees_usd": float(self.portfolio.total_fees),
             "signals": int(self.metadata["signals_count"]),
             "trades": len(self.trades),
             "wins": wins,
@@ -274,4 +285,6 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         }
         with open(REPORT_PATH, "w", encoding="utf-8") as handle:
             json.dump(report, handle, ensure_ascii=False, indent=2)
+        if self.received_bars != int(self.metadata["bars_count"]):
+            self.error(f"LEAN OHLC ingestion mismatch: expected={self.metadata['bars_count']} received={self.received_bars}")
         self.debug("LEAN_BACKTEST_COMPLETED")
