@@ -6,6 +6,8 @@ class LeanRealWorkflowTests(unittest.TestCase):
     def test_real_workflow_does_not_call_synthetic_fixture(self):
         workflow = pathlib.Path(".github/workflows/lean-real-backtest.yml").read_text()
         self.assertIn("scripts/prepare_lean_backtest.py", workflow)
+        preparation_step = workflow.split("      - name: Validate request and prepare real historical market candles", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("PYTHONPATH: ${{ github.workspace }}", preparation_step)
         self.assertIn("quantconnect/lean:latest", workflow)
         self.assertIn("type: string", workflow)
         self.assertIn("5m,15m,1h", workflow)
