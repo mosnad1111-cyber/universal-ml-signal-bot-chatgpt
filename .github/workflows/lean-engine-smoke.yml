@@ -12,13 +12,16 @@ permissions:
 
 jobs:
   lean-engine-smoke:
-    runs-on: ubuntu-latest
+    # The x64 LEAN image is 13+ GB compressed and cannot fit on a standard
+    # 14 GB x64 runner. The official ARM64 image is substantially smaller.
+    # ARM64 standard runners are free for public repositories.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Reclaim runner disk space for the LEAN image
+      - name: Reclaim runner disk space
         shell: bash
         run: |
           set -euo pipefail
@@ -40,133 +43,35 @@ jobs:
             --output "$RUNNER_TEMP/lean/config.json"
           python - "$RUNNER_TEMP/lean/config.json" <<'PY'
           import pathlib
-          import re
           import sys
 
           path = pathlib.Path(sys.argv[1])
           config = path.read_text(encoding="utf-8")
-          config = config.replace(
-              '"algorithm-type-name": "BasicTemplateFrameworkAlgorithm"',
-              '"algorithm-type-name": "LeanSmokeAlgorithm"',
-          )
-          config = config.replace(
-              '"algorithm-language": "CSharp"',
-              '"algorithm-language": "Python"',
-          )
-          config = config.replace(
-              '"algorithm-location": "QuantConnect.Algorithm.CSharp.dll"',
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
-          )
-          config = config.replace(
-              '"data-folder": "../../../Data/"',
-              '"data-folder": "/Data/"',
-          )
-          required = (
-              '"algorithm-type-name": "LeanSmokeAlgorithm"',
-              '"algorithm-language": "Python"',
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
-              '"data-folder": "/Data/"',
-          )
-          missing = [item for item in required if item not in config]
-          if missing:
-              raise SystemExit("LEAN config template changed; missing: " + repr(missing))
+          replacements = {
+              '"algorithm-type-name": "BasicTemplateFrameworkAlgorithm"':
+                  '"algorithm-type-name": "LeanSmokeAlgorithm"',
+              '"algorithm-language": "CSharp"':
+                  '"algorithm-language": "Python"',
+              '"algorithm-location": "QuantConnect.Algorithm.CSharp.dll"':
+                  '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
+              '"data-folder": "../../../Data/"':
+                  '"data-folder": "/Data/"',
+          }
+          for old, new in replacements.items():
+              if old not in config:
+                  raise SystemExit(f"LEAN config template changed; missing {old}")
+              config = config.replace(old, new, 1)
           path.write_text(config, encoding="utf-8")
           PY
 
-      - name: Pull the open-source LEAN engine image
-        run: docker pull quantconnect/lean:latest
+      - name: Pull the official ARM64 LEAN engine image
+        run: docker pull --platform linux/arm64 quantconnect/lean:latest
 
       - name: Run LEAN without QuantConnect Cloud or CLI
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm \
-            --volume "$RUNNER_TEMP/lean/Algorithm.Python:/Lean/Algorithm.Python:ro" \
-            --volume "$RUNNER_TEMP/lean/config.json:/Lean/Launcher/config.json:ro" \
-            --volume "$RUNNER_TEMP/lean/Data:/Data:ro" \
-            --volume "$RUNNER_TEMP/lean/Results:/Results" \
-            quantconnect/lean:latest \
-            --data-folder /Data \
-            --results-destination-folder /Results \
-            --config /Lean/Launcher/config.json 2>&1 | tee "$RUNNER_TEMP/lean/lean.log"
-
-      - name: Verify LEAN initialized and completed the Python algorithm
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q "LEAN_SMOKE_INITIALIZED" "$RUNNER_TEMP/lean/lean.log"
-          grep -q "LEAN_SMOKE_COMPLETED" "$RUNNER_TEMP/lean/lean.log"
-,
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py",',
-              config,
-          )
-          config = config.replace(
-              '"data-folder": "../../../Data/"',
-              '"data-folder": "/Data/"',
-          )
-          required = (
-              '"algorithm-type-name": "LeanSmokeAlgorithm"',
-              '"algorithm-language": "Python"',
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
-              '"data-folder": "/Data/"',
-          )
-          missing = [item for item in required if item not in config]
-          if missing:
-              raise SystemExit("LEAN config template changed; missing: " + repr(missing))
-          path.write_text(config, encoding="utf-8")
-          PY
-
-      - name: Pull the open-source LEAN engine image
-        run: docker pull quantconnect/lean:latest
-
-      - name: Run LEAN without QuantConnect Cloud or CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            --volume "$RUNNER_TEMP/lean/Algorithm.Python:/Lean/Algorithm.Python:ro" \
-            --volume "$RUNNER_TEMP/lean/config.json:/Lean/Launcher/config.json:ro" \
-            --volume "$RUNNER_TEMP/lean/Data:/Data:ro" \
-            --volume "$RUNNER_TEMP/lean/Results:/Results" \
-            quantconnect/lean:latest \
-            --data-folder /Data \
-            --results-destination-folder /Results \
-            --config /Lean/Launcher/config.json 2>&1 | tee "$RUNNER_TEMP/lean/lean.log"
-
-      - name: Verify LEAN initialized and completed the Python algorithm
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q "LEAN_SMOKE_INITIALIZED" "$RUNNER_TEMP/lean/lean.log"
-          grep -q "LEAN_SMOKE_COMPLETED" "$RUNNER_TEMP/lean/lean.log"
-,
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py",',
-              config,
-          )
-          config = config.replace(
-              '"data-folder": "../../../Data/"',
-              '"data-folder": "/Data/"',
-          )
-          required = (
-              '"algorithm-type-name": "LeanSmokeAlgorithm"',
-              '"algorithm-language": "Python"',
-              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
-              '"data-folder": "/Data/"',
-          )
-          missing = [item for item in required if item not in config]
-          if missing:
-              raise SystemExit("LEAN config template changed; missing: " + repr(missing))
-          path.write_text(config, encoding="utf-8")
-          PY
-
-      - name: Pull the open-source LEAN engine image
-        run: docker pull quantconnect/lean:latest
-
-      - name: Run LEAN without QuantConnect Cloud or CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
+          docker run --rm --platform linux/arm64 \
             --volume "$RUNNER_TEMP/lean/Algorithm.Python:/Lean/Algorithm.Python:ro" \
             --volume "$RUNNER_TEMP/lean/config.json:/Lean/Launcher/config.json:ro" \
             --volume "$RUNNER_TEMP/lean/Data:/Data:ro" \
