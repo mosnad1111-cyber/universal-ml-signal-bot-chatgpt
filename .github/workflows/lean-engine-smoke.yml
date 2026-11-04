@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/lean/Algorithm.Python" "$RUNNER_TEMP/lean/Results"
-          cp lean_smoke/LeanSmokeAlgorithm.py "$RUNNER_TEMP/lean/Algorithm.Python/"
+          cp lean_smoke/LeanSmokeAlgorithm.py lean_smoke/LeanBacktestAlgorithm.py "$RUNNER_TEMP/lean/Algorithm.Python/"
           curl --fail --silent --show-error --location \
             https://raw.githubusercontent.com/QuantConnect/Lean/master/Launcher/config.json \
             --output "$RUNNER_TEMP/lean/config.json"
@@ -86,3 +86,64 @@ jobs:
           set -euo pipefail
           grep -q "LEAN_SMOKE_INITIALIZED" "$RUNNER_TEMP/lean/lean.log"
           grep -q "LEAN_SMOKE_COMPLETED" "$RUNNER_TEMP/lean/lean.log"
+
+      - name: Prepare synthetic OHLC execution fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lean/Results/lean-backtest"
+          python lean_smoke/create_lean_fixture.py "$RUNNER_TEMP/lean/Algorithm.Python/input"
+          python - "$RUNNER_TEMP/lean/config.json" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          config = path.read_text(encoding="utf-8")
+          config = config.replace(
+              '"algorithm-type-name": "LeanSmokeAlgorithm"',
+              '"algorithm-type-name": "LeanBacktestAlgorithm"',
+              1,
+          )
+          config = config.replace(
+              '"algorithm-location": "../../../Algorithm.Python/LeanSmokeAlgorithm.py"',
+              '"algorithm-location": "../../../Algorithm.Python/LeanBacktestAlgorithm.py"',
+              1,
+          )
+          if '"algorithm-type-name": "LeanBacktestAlgorithm"' not in config:
+              raise SystemExit("Could not configure LeanBacktestAlgorithm")
+          path.write_text(config, encoding="utf-8")
+          PY
+
+      - name: Run LEAN OHLC execution and fee fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            --volume "$RUNNER_TEMP/lean/Algorithm.Python:/Lean/Algorithm.Python:ro" \
+            --volume "$RUNNER_TEMP/lean/config.json:/Lean/Launcher/config.json:ro" \
+            --volume "$RUNNER_TEMP/lean/Results/lean-backtest:/Results" \
+            quantconnect/lean:latest \
+            --results-destination-folder /Results \
+            --config /Lean/Launcher/config.json 2>&1 | tee "$RUNNER_TEMP/lean/lean-backtest.log"
+
+      - name: Verify LEAN order fills, conservative same-bar handling, and fees
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "LEAN_BACKTEST_INITIALIZED" "$RUNNER_TEMP/lean/lean-backtest.log"
+          grep -q "LEAN_BACKTEST_COMPLETED" "$RUNNER_TEMP/lean/lean-backtest.log"
+          python - "$RUNNER_TEMP/lean/Results/lean-backtest/lean_report.json" <<'PY'
+          import json
+          import math
+          import pathlib
+          import sys
+
+          report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert report["trades"] == 2, report
+          assert [trade["result"] for trade in report["trades_detail"]] == ["TP", "SL"], report
+          assert math.isclose(report["gross_r"], 1.0, abs_tol=1e-9), report
+          assert math.isclose(report["fees_r"], 0.10, abs_tol=1e-9), report
+          assert math.isclose(report["net_r"], 0.90, abs_tol=1e-9), report
+          assert report["unfilled_setups"] == 0, report
+          assert report["unresolved_trades"] == 0, report
+          PY
