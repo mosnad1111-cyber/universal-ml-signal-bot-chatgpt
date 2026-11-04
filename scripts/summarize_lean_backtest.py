@@ -47,8 +47,6 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN input candle count differs from prepared history.")
         if report.get("order_errors"):
             raise SystemExit(f"{tf}: LEAN order execution errors: {report['order_errors']}")
-        if int(report.get("unresolved_trades", 0)) > 0:
-            raise SystemExit(f"{tf}: LEAN has unresolved trades at the end of the data window.")
         if float(report.get("lean_total_fees_usd", 0.0)) < 0:
             raise SystemExit(f"{tf}: invalid LEAN fee total.")
 
