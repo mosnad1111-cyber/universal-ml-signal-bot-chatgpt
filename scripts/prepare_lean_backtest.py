@@ -75,6 +75,10 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
             writer.writerows(rows)
         day_cursor += timedelta(days=1)
 
+    market_data_source = str(result.get("market_data_source") or "").strip()
+    if not market_data_source:
+        raise RuntimeError(f"{asset_key} {tf}: market data provider was not identified")
+
     metadata = {
         "request_id": request_id,
         "asset_key": asset_key,
@@ -87,10 +91,11 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "fee_r": 0.05,
         "bars_count": len(result["market_bars"]),
         "signals_count": len(result["lean_events"]),
-        "data_source": "same completed OHLC snapshot used by GoldBacktest",
+        "data_source": "real historical OHLC from the configured market-data provider",
+        "market_data_source": market_data_source,
         "volume_note": (
             "Gold volume is the existing neutral proxy and is not treated as real traded volume."
-            if asset_key == "GOLD" else "Binance reported base-asset volume."
+            if asset_key == "GOLD" else str(result.get("market_data_warning") or "Binance/TradingView historical volume; provider is identified above."),
         ),
     }
     (tf_dir / "metadata.json").write_text(
