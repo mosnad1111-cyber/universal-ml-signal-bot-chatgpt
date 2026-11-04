@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/lean-engine-smoke.yml"
       - "lean_smoke/**"
+      - "scripts/prepare_lean_backtest.py"
+      - "backtest.py"
   workflow_dispatch:
 
 permissions:
@@ -139,10 +141,12 @@ jobs:
           import sys
 
           report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert report["bars"] == 5 and report["received_bars"] == 5, report
           assert report["trades"] == 2, report
           assert [trade["result"] for trade in report["trades_detail"]] == ["TP", "SL"], report
           assert math.isclose(report["gross_r"], 1.0, abs_tol=1e-9), report
           assert math.isclose(report["fees_r"], 0.10, abs_tol=1e-9), report
+          assert math.isclose(report["lean_total_fees_usd"], 0.20, abs_tol=1e-9), report
           assert math.isclose(report["net_r"], 0.90, abs_tol=1e-9), report
           assert report["unfilled_setups"] == 0, report
           assert report["unresolved_trades"] == 0, report
