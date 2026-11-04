@@ -23,3 +23,36 @@ Python 3.12.13، Web Service، ثم تشغيل Gunicorn عبر `web:app`. يلز
 يوفر زر **مختبر الاستراتيجيات** مقارنة بحثية بين الاستراتيجية الحالية وثلاث فرضيات: الارتداد داخل الاتجاه، الاختراق وإعادة الاختبار، واستمرار الزخم. يتدرب نموذج مستقل لكل فرضية باستخدام قواعد دخول ووقف وهدف خاصة بها، ثم تُقيّم النتائج زمنيًا على مجموعة معايرة ومجموعة احتجاز لاحقة. لا يغيّر المختبر استراتيجية الإشارات الحية تلقائيًا.
 
 تُعرض حساسية النتائج لخصم افتراضي قدره 0.05R و0.10R لكل صفقة؛ هذه ليست تكاليف وسيط فعلية. كما أن تسميات التدريب تظل ضمن نافذة ملاحظة محدودة، لذلك يجب مراجعة تغطية التسميات والحالات غير المحسومة قبل اعتماد أي مرشح. اختيار استراتيجية من عدة مرشحين على المجموعة الاحتجازية يقتضي اختبارًا نهائيًا جديدًا على فترة لم تُستخدم في الاختيار.
+
+
+## Independent LEAN / QuantConnect backtesting (optional)
+
+The application can connect to the documented QuantConnect Cloud API to compile
+and submit a backtest for a QuantConnect project. This is intentionally separate
+from the existing in-process Walk-Forward research lab.
+
+Configure these Render environment variables to enable the API client:
+
+- `QC_USER_ID`: QuantConnect user ID.
+- `QC_API_TOKEN`: API token from QuantConnect account settings. Store it only
+  as a Render secret; never commit it or send it in chat.
+- `QC_PROJECT_ID`: ID of a QuantConnect project containing a LEAN algorithm.
+
+The client is disabled when any required value is missing, so the current bot
+starts and behaves as before. The API adapter authenticates, requests a compile,
+and submits a backtest; it does not silently claim that a QuantConnect algorithm
+is equivalent to this bot's XGBoost strategy. Before exposing a Telegram action
+or comparing performance, the LEAN project must be populated with an algorithm
+that consumes the same completed XAU/USD and BTC/USDT candles, reproduces the
+bot's signal/entry/SL/TP rules, and models the intended spread, fees and slippage.
+The project must also be tested against known fixtures from the current engine.
+
+Local `lean backtest` uses Docker; the current Render Python web service does
+not provide a Docker daemon. This integration therefore targets QuantConnect
+Cloud's API rather than attempting to start Docker inside the web service.
+QuantConnect Cloud account/organization plan requirements and usage charges
+are controlled by QuantConnect. No live-trading endpoints are used here.
+
+This first integration step deliberately does not replace the existing Backtest
+button or change live signals. Enable the API only after a valid project is
+available and its algorithm parity has been verified.
