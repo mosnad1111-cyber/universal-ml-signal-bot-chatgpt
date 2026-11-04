@@ -33,6 +33,7 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertIn("lean_smoke/create_lean_fixture.py", pathlib.Path(".github/workflows/lean-engine-smoke.yml").read_text())
         fixture = pathlib.Path("lean_smoke/create_lean_fixture.py").read_text()
         self.assertIn('"bars.csv"', fixture)
+        self.assertIn("2024-01-03 00:20:00", fixture)
         self.assertNotIn("bars_dir", fixture)
         self.assertNotIn("create_lean_fixture.py", workflow)
         self.assertIn("market_data_type", pathlib.Path("scripts/summarize_lean_backtest.py").read_text())
