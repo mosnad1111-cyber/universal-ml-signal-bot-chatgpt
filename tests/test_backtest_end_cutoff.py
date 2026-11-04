@@ -72,7 +72,7 @@ class BacktestUtcCutoffTests(unittest.TestCase):
         frame.attrs["market_data_source"] = "unit-test historical OHLC"
 
         backtest = GoldBacktest()
-        backtest._enrich = lambda timeframe, features, symbol: features.copy()
+        backtest._enrich = lambda timeframe, features, symbol, end_before=None: features.copy()
         with patch("backtest.fetch", side_effect=lambda *args, **kwargs: frame.copy()) as fetch_mock:
             with patch("backtest.add_features", side_effect=lambda data: data):
                 first = backtest._prepare(
