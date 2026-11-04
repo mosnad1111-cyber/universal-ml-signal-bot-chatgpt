@@ -4,25 +4,20 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-bars_dir = root / "bars"
-bars_dir.mkdir(parents=True, exist_ok=True)
+root.mkdir(parents=True, exist_ok=True)
 
 bars = [
-    ("20240102 00:00:00", 100, 101, 99, 100, 10, 5),
-    ("20240102 00:05:00", 100, 101, 99, 100, 10, 5),
-    ("20240102 00:10:00", 100, 105, 99, 104, 10, 5),
-    ("20240102 00:15:00", 100, 103, 99, 101, 10, 5),
-    ("20240102 00:20:00", 100, 104, 96, 100, 10, 5),
+    ("2024-01-02 00:00:00", 100, 101, 99, 100, 10, 5),
+    ("2024-01-02 00:05:00", 100, 101, 99, 100, 10, 5),
+    ("2024-01-02 00:10:00", 100, 105, 99, 104, 10, 5),
+    ("2024-01-02 00:15:00", 100, 103, 99, 101, 10, 5),
+    ("2024-01-02 00:20:00", 100, 104, 96, 100, 10, 5),
 ]
 header = ("time", "open", "high", "low", "close", "volume", "period_minutes")
-with (bars_dir / "20240102.csv").open("w", newline="", encoding="utf-8") as handle:
+with (root / "bars.csv").open("w", newline="", encoding="utf-8") as handle:
     writer = csv.writer(handle)
     writer.writerow(header)
     writer.writerows(bars)
-# LEAN may ask for the UTC day containing the end-of-day frontier. Keep an
-# explicit empty partition so the boundary request does not abort the feed.
-with (bars_dir / "20240103.csv").open("w", newline="", encoding="utf-8") as handle:
-    csv.writer(handle).writerow(header)
 
 metadata = {
     "request_id": "lean-smoke-fixture",
