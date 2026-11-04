@@ -81,7 +81,15 @@ def main() -> None:
                 for day in sorted(set(expected_daily) | set(received_daily))
                 if expected_daily.get(day, 0) != received_daily.get(day, 0)
             }
-            raise SystemExit(f"{tf}: LEAN per-day OHLC ingestion mismatch: {mismatches}")
+            raise SystemExit(f"{tf}: LEAN per-day CSV reader mismatch: {mismatches}")
+        delivered_daily = report.get("on_data_daily_counts", {})
+        if expected_daily != delivered_daily:
+            mismatches = {
+                day: {"prepared": expected_daily.get(day, 0), "on_data": delivered_daily.get(day, 0)}
+                for day in sorted(set(expected_daily) | set(delivered_daily))
+                if expected_daily.get(day, 0) != delivered_daily.get(day, 0)
+            }
+            raise SystemExit(f"{tf}: LEAN per-day OnData delivery mismatch: {mismatches}")
         if expected_bars != received_bars:
             raise SystemExit(
                 f"{tf}: LEAN emitted {received_bars}/{expected_bars} prepared bars "
