@@ -34,6 +34,7 @@ class LeanRealWorkflowTests(unittest.TestCase):
         self.assertNotIn("create_lean_fixture.py", workflow)
         self.assertIn("market_data_type", pathlib.Path("scripts/summarize_lean_backtest.py").read_text())
         self.assertIn("synthetic_fixture", pathlib.Path("scripts/summarize_lean_backtest.py").read_text())
+        preparation = pathlib.Path("scripts/prepare_lean_backtest.py").read_text()
         summary = pathlib.Path("scripts/summarize_lean_backtest.py").read_text()
         self.assertIn("reader_unique_timestamps", summary)
         self.assertIn("reader_parsed_rows", summary)
