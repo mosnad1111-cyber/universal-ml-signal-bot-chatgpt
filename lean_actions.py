@@ -220,17 +220,35 @@ class LeanActionsClient:
             display_title = run.get("display_title")
             if display_title and display_title != expected_title:
                 raise LeanActionsError("Run title does not match the Telegram request.")
-            if run.get("status") != "completed":
-                return {"ok": False, "error": "workflow_not_completed"}, 409
-
             chat_id = pending.get("chat_id")
             if not chat_id or str(chat_id) != str(self.db.get_setting("telegram_chat_id", "")):
                 raise LeanActionsError("Telegram chat does not match the registered bot chat.")
 
-            if run.get("conclusion") != "success":
+            workflow_status = run.get("status")
+            workflow_conclusion = run.get("conclusion")
+            failure_detail = None
+            if workflow_status == "in_progress":
+                # This is the workflow final step. It cannot become completed
+                # until this callback returns, so inspect failed job steps and
+                # the uploaded artifact rather than waiting for run completion.
+                jobs_payload = self._get_json(f"{self.api_base}/actions/runs/{int(run_id)}/jobs")
+                failed_steps = [
+                    step.get("name", "unknown step")
+                    for job in jobs_payload.get("jobs", [])
+                    for step in job.get("steps", [])
+                    if step.get("conclusion") == "failure"
+                ]
+                if failed_steps:
+                    failure_detail = ", ".join(failed_steps[:4])
+            elif workflow_status == "completed" and workflow_conclusion != "success":
+                failure_detail = str(workflow_conclusion or "unknown")
+            elif workflow_status != "completed":
+                return {"ok": False, "error": "workflow_not_ready"}, 409
+
+            if failure_detail:
                 message = (
-                    "❌ <b>فشل باكتيست LEAN الحقيقي.</b>\n"
-                    f"المرحلة: {html.escape(str(run.get('conclusion', 'غير معروف')))}\n"
+                    "❌ <b>فشل باكتيست LEAN الحقيقي.</b>\\n"
+                    f"المرحلة: {html.escape(failure_detail)}\\n"
                     f"<a href=\"{html.escape(run.get('html_url', ''), quote=True)}\">سجل التشغيل على GitHub</a>"
                 )
                 telegram.send(message, chat_id)
@@ -238,8 +256,9 @@ class LeanActionsClient:
                 self.db.set_setting(pending_key, json.dumps({**pending, "status": "failed", "run_id": run_id}))
                 if self.db.get_setting("lean_active_request") == request_id:
                     self.db.set_setting("lean_active_request", "")
-                return {"ok": True, "workflow_conclusion": run.get("conclusion")}, 200
+                return {"ok": True, "workflow_conclusion": workflow_conclusion or "failure"}, 200
 
+            # Artifact upload is the last successful step before this callback.
             summary = self._read_artifact(int(run_id), request_id)
             if summary.get("synthetic_fixture") is not False:
                 raise LeanActionsError("رفض التقرير: وسم synthetic_fixture غير مطابق.")
