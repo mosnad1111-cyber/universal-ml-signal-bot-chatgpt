@@ -71,6 +71,7 @@ jobs:
           TIMEFRAMES: ${{ inputs.timeframes }}
           REQUEST_ID: ${{ inputs.request_id }}
           OUTPUT_DIR: ${{ runner.temp }}/lean/input
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python - <<'PY'
