@@ -107,6 +107,12 @@ class LeanBacktestAlgorithm(QCAlgorithm):
 
         start = self._parse_utc(self.metadata["start"])
         end = self._parse_utc(self.metadata["end"])
+        current_utc_day = datetime.now(timezone.utc).date()
+        if end.date() >= current_utc_day:
+            raise ValueError(
+                f"Prepared LEAN history ends on {end.date()}, but LEAN only accepts "
+                f"completed days before current UTC day {current_utc_day}."
+            )
         # Snapshot timestamps and the consolidated CSV stream are UTC. LEAN defaults
         # algorithm time to New York, which shifts the requested UTC file date
         # and can exclude midnight UTC bars from the backtest window.
@@ -138,6 +144,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         self.order_errors = []
         self.received_bars = 0
 
+        self.debug(
+            f"LEAN_HISTORY_WINDOW start={start.isoformat()} end={end.isoformat()} "
+            f"excluded_current_day_bars={self.metadata.get('end_window_excluded_bars', 0)}"
+        )
         self.debug("LEAN_BACKTEST_INITIALIZED")
 
     @staticmethod
@@ -300,6 +310,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
             "market_data_source": self.metadata.get("market_data_source", ""),
+            "history_start_utc": self.metadata.get("start", ""),
+            "history_end_utc": self.metadata.get("end", ""),
+            "end_before_exclusive_utc": self.metadata.get("end_before_exclusive_utc", ""),
+            "excluded_current_day_bars": int(self.metadata.get("end_window_excluded_bars", 0)),
             "bars": int(self.metadata["bars_count"]),
             "received_bars": int(self.received_bars),
             "reader_parsed_rows": int(READER_STATS["parsed_rows"]),
