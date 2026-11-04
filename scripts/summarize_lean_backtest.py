@@ -41,9 +41,22 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN report request ID mismatch.")
         if report.get("asset_key") != args.asset or report.get("timeframe") != tf:
             raise SystemExit(f"{tf}: LEAN report instrument/timeframe mismatch.")
-        if int(report.get("bars", -1)) != int(report.get("received_bars", -2)):
-            raise SystemExit(f"{tf}: LEAN did not ingest every real OHLC bar.")
-        if int(report.get("bars", 0)) != int(metadata.get("bars_count", -1)):
+        expected_bars = int(report.get("bars", -1))
+        received_bars = int(report.get("received_bars", -2))
+        reader_unique = int(report.get("reader_unique_timestamps", -1))
+        if reader_unique != expected_bars:
+            raise SystemExit(
+                f"{tf}: LEAN CSV reader parsed {reader_unique} unique timestamps "
+                f"for {expected_bars} prepared bars "
+                f"(parsed_rows={report.get('reader_parsed_rows')}, "
+                f"invalid_rows={report.get('reader_invalid_rows')})."
+            )
+        if expected_bars != received_bars:
+            raise SystemExit(
+                f"{tf}: LEAN emitted {received_bars}/{expected_bars} prepared bars "
+                f"to OnData after reading {reader_unique} unique CSV timestamps."
+            )
+        if expected_bars != int(metadata.get("bars_count", -1)):
             raise SystemExit(f"{tf}: LEAN input candle count differs from prepared history.")
         if report.get("order_errors"):
             raise SystemExit(f"{tf}: LEAN order execution errors: {report['order_errors']}")
