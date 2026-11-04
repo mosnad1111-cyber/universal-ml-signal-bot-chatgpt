@@ -78,3 +78,11 @@ Gold OHLC is historical Dukascopy data, but its volume field is the project's
 constant neutral proxy and is not real traded volume. LEAN fees currently use a
 declared 0.05R round-trip assumption, not broker-specific commissions, spread or
 slippage. Results are research/backtest output, not broker execution.
+
+The XGBoost walk-forward fitting and signal decisions are produced by the bot's
+Python pipeline from the real historical candles. LEAN does **not** retrain an
+XGBoost model inside its engine; it independently replays those timestamped
+decision levels against the same completed raw OHLC bars and processes order
+fills, stop/target resolution, and the configured fee model. The report is
+therefore a real-data, LEAN-executed backtest of the bot's model decisions, not
+a synthetic fixture and not a fully native LEAN/XGBoost training implementation.
