@@ -100,6 +100,9 @@ def _write_timeframe(output: Path, asset_key: str, tf: str, result: dict, reques
         "bars_count": len(result["market_bars"]),
         "bars_file": "bars.csv",
         "partitioning": "single chronological CSV stream; UTC daily counts retained for validation",
+        "end_before_exclusive_utc": result.get("end_before_exclusive_utc"),
+        "end_window_excluded_bars": int(result.get("end_window_excluded_bars", 0)),
+        "lean_end_policy": "Only candles strictly before the current UTC day are exported because LEAN clamps SetEndDate to yesterday; Python training and LEAN replay use this identical window.",
         "daily_bar_counts": dict(sorted(daily_bar_counts.items())),
         "requested_bars": int(result.get("requested_bars", len(result["market_bars"]))),
         "raw_bars": int(result.get("raw_bars", len(result["market_bars"]))),
@@ -157,6 +160,12 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     summaries = {}
     backtest = GoldBacktest()
+    # LEAN's SetEndDate deliberately clamps to yesterday in the algorithm
+    # timezone. Exclude the current UTC day before feature engineering so the
+    # XGBoost walk-forward signals, Python baseline, and LEAN replay all use
+    # exactly the same fully completed historical window.
+    end_before = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    print(f"[prepare] LEAN history cutoff (exclusive UTC): {end_before.isoformat()}", flush=True)
 
     for tf in timeframes:
         requested = TIMEFRAME_BARS[tf]
@@ -168,6 +177,7 @@ def main():
             symbol=asset["symbol"],
             include_all_trades=True,
             include_lean_payload=True,
+            end_before=end_before,
         )
         if result.get("error"):
             raise RuntimeError(f"{args.asset} {tf} preparation failed: {result['error']}")
@@ -183,7 +193,8 @@ def main():
         print(
             f"[prepare] {tf}: bars={metadata['bars_count']} "
             f"signals={metadata['signals_count']} "
-            f"python_trades={result.get('trades', 0)}",
+            f"python_trades={result.get('trades', 0)} "
+            f"excluded_current_day_bars={metadata['end_window_excluded_bars']}",
             flush=True,
         )
 
