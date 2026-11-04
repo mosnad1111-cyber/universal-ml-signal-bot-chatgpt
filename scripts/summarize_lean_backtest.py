@@ -44,6 +44,17 @@ def main() -> None:
             raise SystemExit(f"{tf}: LEAN report instrument/timeframe mismatch.")
         if report.get("market_data_source") != source:
             raise SystemExit(f"{tf}: LEAN report market-data provenance does not match prepared history.")
+        if report.get("history_end_utc") != metadata.get("end"):
+            raise SystemExit(f"{tf}: LEAN replay end timestamp differs from prepared Python history.")
+        if report.get("end_before_exclusive_utc") != metadata.get("end_before_exclusive_utc"):
+            raise SystemExit(f"{tf}: LEAN and Python use different UTC history cutoffs.")
+        if int(report.get("excluded_current_day_bars", -1)) != int(metadata.get("end_window_excluded_bars", -2)):
+            raise SystemExit(f"{tf}: current-day excluded candle count differs between preparation and LEAN.")
+        history_end = datetime.fromisoformat(str(metadata["end"]).replace("Z", "+00:00"))
+        if history_end.tzinfo is None:
+            history_end = history_end.replace(tzinfo=timezone.utc)
+        if history_end.date() >= datetime.now(timezone.utc).date():
+            raise SystemExit(f"{tf}: prepared LEAN history contains the current UTC day.")
         if int(report.get("signals", -1)) != int(metadata.get("signals_count", -2)):
             raise SystemExit(f"{tf}: LEAN signal count differs from the prepared walk-forward signals.")
         expected_bars = int(report.get("bars", -1))
