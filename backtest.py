@@ -421,7 +421,7 @@ class GoldBacktest:
     def run(self, tf, bars=None, retrain_every=None, min_score_override=None,
             min_ai_override=None, _prepared=None, _predictions=None, symbol=GOLD_DATA_SYMBOL,
             strategy='baseline', include_all_trades=False, include_lean_payload=False,
-            end_before=None):
+            end_before=None, decision_only=False):
         started = time.time()
         requested_bars = self._requested_bars(tf, bars)
         retrain_every = int(retrain_every if retrain_every is not None else BACKTEST_RETRAIN_EVERY)
@@ -522,6 +522,13 @@ class GoldBacktest:
                         'score': float(setup['score']),
                         'ai_prob': float(setup['ai_prob']),
                     })
+                if decision_only:
+                    # The research lab must not use Python's trade resolver to
+                    # decide which future setups exist. Export every accepted
+                    # decision and let LEAN alone arbitrate pending/active trades,
+                    # fills, exits, and same-candle SL/TP ambiguity.
+                    i += 1
+                    continue
                 start = raw.index.searchsorted(row.name, side='right')
                 result, end_j, act_j = self._resolve(raw, start, setup)
                 if result:
@@ -613,6 +620,7 @@ class GoldBacktest:
             'elapsed_s': round(time.time()-started, 1),
             'trades_detail': trades if include_all_trades else trades[-100:],
             'strategy': strategy,
+            'decision_only': bool(decision_only),
         }
         res['symbol'] = symbol
         res['asset_label'] = next((a['label'] for a in ASSETS.values() if a['symbol'] == symbol), symbol)
