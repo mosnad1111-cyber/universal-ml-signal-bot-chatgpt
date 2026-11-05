@@ -40,6 +40,28 @@ def _validate_execution(metadata: dict, report: dict, request_id: str,
         raise SystemExit(f"{timeframe}/{strategy}: LEAN asset/timeframe mismatch.")
     if report.get("strategy") != strategy:
         raise SystemExit(f"{timeframe}/{strategy}: LEAN executed a different strategy.")
+    try:
+        expected_cash = float(metadata["lean_initial_cash_usd"])
+        expected_max_price = float(metadata["max_ohlc_price"])
+        cash_buffer = float(metadata["lean_cash_buffer_multiplier"])
+        reported_cash = float(report["initial_cash_usd"])
+        reported_max_price = float(report["max_ohlc_price"])
+        reported_quantity = float(report["position_quantity_units"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"{timeframe}/{strategy}: LEAN one-unit buying-power metadata is incomplete: {exc}") from exc
+    if not all(math.isfinite(value) for value in (
+        expected_cash, expected_max_price, cash_buffer,
+        reported_cash, reported_max_price, reported_quantity,
+    )):
+        raise SystemExit(f"{timeframe}/{strategy}: LEAN buying-power metadata is not finite.")
+    if expected_cash <= 0 or expected_max_price <= 0 or cash_buffer < 1.0 or reported_quantity != 1.0:
+        raise SystemExit(f"{timeframe}/{strategy}: LEAN one-unit buying-power configuration is invalid.")
+    if not (
+        math.isclose(reported_cash, expected_cash, rel_tol=1e-9, abs_tol=1e-6)
+        and math.isclose(reported_max_price, expected_max_price, rel_tol=1e-9, abs_tol=1e-6)
+        and expected_cash >= expected_max_price * cash_buffer
+    ):
+        raise SystemExit(f"{timeframe}/{strategy}: LEAN buying power does not match prepared OHLC notional.")
     if report.get("market_data_source") != source:
         raise SystemExit(f"{timeframe}/{strategy}: LEAN market-data provenance mismatch.")
     if report.get("history_start_utc") != metadata.get("start"):
