@@ -213,17 +213,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$TIMEFRAMES" = "all" ]; then
-            TF_LIST=(5m 15m 1h)
-          else
-            IFS=',' read -r -a TF_LIST <<< "$TIMEFRAMES"
-          fi
           mkdir -p "$LEAN_DIR/results"
           for tf in 5m 15m 1h; do
-            selected=false
-            for selected_tf in "$TIMEFRAMES"; do
-              if [ "$TIMEFRAMES" = "all" ] || [ "$tf" = "$selected_tf" ]; then selected=true; fi
-            done
             if [ "$TIMEFRAMES" != "all" ] && [[ ",$TIMEFRAMES," != *",$tf,"* ]]; then continue; fi
             for strategy in baseline trend_pullback breakout_retest momentum_continuation; do
               STRATEGY_INPUT="$PREPARED_DIR/$tf/strategies/$strategy"
