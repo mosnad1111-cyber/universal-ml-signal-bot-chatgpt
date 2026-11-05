@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,29 @@ def _utc_timestamp(value) -> pd.Timestamp:
 
 def _utc_iso(value) -> str:
     return _utc_timestamp(value).isoformat()
+
+
+def _lean_capital_requirements(raw: pd.DataFrame) -> tuple[float, float]:
+    """Size LEAN's cash buffer for one fixed unit at the highest historical OHLC price.
+
+    Strategy execution remains one unit per entry. The account cash is only the
+    buying-power envelope required to let LEAN validate that unit at every
+    historical price, with 50% headroom; it does not change signal size.
+    """
+    if raw.empty:
+        raise RuntimeError("Cannot size LEAN buying power from empty OHLC history.")
+    columns = ("Open", "High", "Low", "Close")
+    missing = [column for column in columns if column not in raw.columns]
+    if missing:
+        raise RuntimeError(f"Cannot size LEAN buying power; OHLC columns missing: {missing}")
+    values = pd.concat([pd.to_numeric(raw[column], errors="coerce") for column in columns])
+    values = values[values.map(math.isfinite)]
+    if values.empty or (values <= 0).any():
+        raise RuntimeError("Cannot size LEAN buying power from invalid or non-positive OHLC prices.")
+    max_price = float(values.max())
+    required_cash = max(100_000.0, max_price * 1.5)
+    initial_cash = float(math.ceil(required_cash / 1000.0) * 1000)
+    return max_price, initial_cash
 
 
 def _write_bars(tf_dir: Path, raw: pd.DataFrame) -> tuple[int, dict[str, int]]:
@@ -173,6 +197,7 @@ def main() -> None:
         source = str(prepared.get("market_data_source") or "").strip()
         if not source or "synthetic" in source.lower():
             raise RuntimeError(f"{args.asset} {tf}: historical provider is not identified as real data.")
+        max_ohlc_price, lean_initial_cash_usd = _lean_capital_requirements(raw)
 
         common = {
             "request_id": args.request_id,
@@ -189,6 +214,10 @@ def main() -> None:
             "fee_r": 0.05,
             "bars_count": bars_count,
             "bars_file": "bars.csv",
+            "max_ohlc_price": max_ohlc_price,
+            "lean_initial_cash_usd": lean_initial_cash_usd,
+            "lean_position_units": 1.0,
+            "lean_cash_buffer_multiplier": 1.5,
             "raw_bars": int(prepared.get("received_bars", len(raw))),
             "completed_bars": len(raw),
             "usable_bars": len(features),
