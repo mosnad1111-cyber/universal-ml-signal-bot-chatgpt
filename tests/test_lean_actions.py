@@ -176,5 +176,111 @@ class LeanActionsTests(unittest.TestCase):
         self.assertEqual(db.get_setting("lean_delivered:123"), None)
 
 
+    def test_dispatch_starts_dedicated_lean_strategy_lab_workflow(self):
+        session = Mock()
+        session.post.return_value = Mock(status_code=204, text="")
+        client = self.make_client(session=session)
+
+        client.dispatch_strategy_lab("d" * 32, "GOLD", ["5m", "15m", "1h"])
+
+        args, kwargs = session.post.call_args
+        self.assertIn("lean-strategy-lab.yml/dispatches", args[0])
+        self.assertEqual(kwargs["json"]["ref"], "main")
+        self.assertEqual(kwargs["json"]["inputs"]["asset"], "GOLD")
+        self.assertEqual(kwargs["json"]["inputs"]["timeframes"], "5m,15m,1h")
+
+    def test_callback_accepts_only_verified_lean_strategy_lab_artifact(self):
+        request_id = "e" * 32
+        db = FakeDB({
+            "telegram_chat_id": "12345",
+            "lean_active_request": request_id,
+            f"lean_request:{request_id}": json.dumps({
+                "chat_id": "12345",
+                "asset_key": "GOLD",
+                "timeframes": ["5m"],
+                "mode": "strategy_lab",
+                "status": "dispatched",
+            }),
+        })
+        client = self.make_client(db=db)
+        client._get_json = Mock(side_effect=[
+            {
+                "path": ".github/workflows/lean-strategy-lab.yml",
+                "event": "workflow_dispatch",
+                "display_title": f"LEAN strategy lab {request_id}",
+                "head_branch": "main",
+                "status": "in_progress",
+                "conclusion": None,
+                "html_url": "https://github.com/owner/repo/actions/runs/456",
+            },
+            {"jobs": [{"steps": [{"name": "Upload report", "conclusion": "success"}]}]},
+        ])
+        executed_metadata = {
+            "strategy": "baseline",
+            "market_data_source": "Dukascopy XAU/USD BID historical OHLC",
+            "raw_bars": 1200,
+            "bars_count": 1200,
+            "signals_count": 2,
+        }
+        executed_report = {
+            "strategy": "baseline",
+            "signals": 2,
+            "bars": 1200,
+            "received_bars": 1200,
+            "reader_parsed_rows": 1200,
+            "reader_unique_timestamps": 1200,
+            "order_errors": [],
+            "trades": 0,
+        }
+        names = ("baseline", "trend_pullback", "breakout_retest", "momentum_continuation")
+        results = {
+            name: (
+                {
+                    "status": "executed",
+                    "metadata": executed_metadata,
+                    "lean_report": executed_report,
+                    "signals_count": 2,
+                }
+                if name == "baseline"
+                else {"status": "not_testable", "error": "insufficient_training_distribution"}
+            )
+            for name in names
+        }
+        client._read_artifact = Mock(return_value={
+            "report_type": "LEAN real historical strategy research lab",
+            "synthetic_fixture": False,
+            "market_data_type": "real_historical_ohlc",
+            "asset_key": "GOLD",
+            "timeframes": [{
+                "metadata": {
+                    "timeframe": "5m",
+                    "market_data_source": "Dukascopy XAU/USD BID historical OHLC",
+                    "raw_bars": 1200,
+                },
+                "results": results,
+            }],
+        })
+
+        class FakeTelegram:
+            def __init__(self):
+                self.sent = []
+            def send_long(self, text, chat_id):
+                self.sent.append((text, chat_id))
+                return True
+            def send(self, text, chat_id):
+                self.sent.append((text, chat_id))
+                return True
+
+        telegram = FakeTelegram()
+        result, status = client.handle_callback(456, request_id, telegram)
+        self.assertEqual(status, 200)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(telegram.sent), 1)
+        self.assertIn("مختبر الاستراتيجيات", telegram.sent[0][0])
+        client._read_artifact.assert_called_once_with(456, request_id, strategy_lab=True)
+        self.assertEqual(db.get_setting("lean_active_request"), "")
+        self.assertEqual(db.get_setting("lean_delivered:456"), "1")
+
+
 if __name__ == "__main__":
     unittest.main()

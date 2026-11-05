@@ -1,0 +1,310 @@
+name: LEAN strategy research lab
+run-name: LEAN strategy lab ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset:
+        description: Market asset
+        required: true
+        type: choice
+        options: [GOLD, BTC]
+      timeframes:
+        description: "all or a comma-separated list such as 5m,15m,1h"
+        required: true
+        type: string
+      request_id:
+        description: Telegram request correlation ID
+        required: true
+        type: string
+      callback_url:
+        description: Render callback URL supplied by the bot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lean-strategy-lab:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Keep Render awake during strategy preparation and replay
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="${CALLBACK_URL%/lean-backtest/callback}"
+          case "$BASE_URL" in https://*) ;; *) echo "Render callback must be HTTPS"; exit 1 ;; esac
+          nohup bash -c '
+            while true; do
+              curl --fail --silent --show-error --max-time 30 "$1/health" >/dev/null || true
+              sleep 300
+            done
+          ' _ "$BASE_URL" >"$RUNNER_TEMP/lean-lab-render-keepalive.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/lean-lab-render-keepalive.pid"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bot model and market-data dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Prepare real historical strategy-specific decisions
+        env:
+          ASSET: ${{ inputs.asset }}
+          TIMEFRAMES: ${{ inputs.timeframes }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          OUTPUT_DIR: ${{ runner.temp }}/lean-lab/input
+          PYTHONPATH: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$TIMEFRAMES" = "all" ]; then
+            TF_LIST="5m,15m,1h"
+          else
+            TF_LIST="$TIMEFRAMES"
+          fi
+          python scripts/prepare_lean_strategy_lab.py \
+            --asset "$ASSET" --timeframes "$TF_LIST" \
+            --request-id "$REQUEST_ID" --output-dir "$OUTPUT_DIR"
+
+      - name: Verify real OHLC and every strategy decision stream
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/lean-lab/input
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          python - <<'PY'
+          import csv, json, os, pathlib
+          from datetime import datetime, timezone
+          root = pathlib.Path(os.environ["OUTPUT_DIR"])
+          prepared = json.loads((root / "prepared_summary.json").read_text(encoding="utf-8"))
+          if prepared.get("request_id") != os.environ["REQUEST_ID"]:
+              raise SystemExit("Strategy-lab request ID mismatch.")
+          if prepared.get("asset_key") != os.environ["ASSET"]:
+              raise SystemExit("Strategy-lab asset mismatch.")
+          strategies = ("baseline", "trend_pullback", "breakout_retest", "momentum_continuation")
+          if tuple(prepared.get("strategy_order", ())) != strategies:
+              raise SystemExit("Unexpected strategy set.")
+          utc_today = datetime.now(timezone.utc).date()
+          for tf, section in prepared.get("timeframes", {}).items():
+              meta = section["metadata"]
+              end = datetime.fromisoformat(str(meta["end"]).replace("Z", "+00:00"))
+              if end.tzinfo is None:
+                  end = end.replace(tzinfo=timezone.utc)
+              if end.date() >= utc_today:
+                  raise SystemExit(f"{tf}: input includes current UTC-day bars.")
+              source = str(meta.get("market_data_source", ""))
+              if not source or "synthetic" in source.lower():
+                  raise SystemExit(f"{tf}: real historical provider is not identified.")
+              if meta.get("market_data_type") != "real_historical_ohlc":
+                  raise SystemExit(f"{tf}: input is not real historical OHLC.")
+              if int(meta.get("raw_bars", 0)) < 1200 or int(meta.get("usable_bars", 0)) < 1200:
+                  raise SystemExit(f"{tf}: insufficient historical bars.")
+              bars_file = root / tf / "bars.csv"
+              if not bars_file.is_file():
+                  raise SystemExit(f"{tf}: common OHLC stream is missing.")
+              with bars_file.open(newline="", encoding="utf-8") as handle:
+                  bars = list(csv.DictReader(handle))
+              if len(bars) != int(meta["bars_count"]):
+                  raise SystemExit(f"{tf}: serialized OHLC row count mismatch.")
+              stamps = [row["time"] for row in bars]
+              if stamps != sorted(stamps) or len(stamps) != len(set(stamps)):
+                  raise SystemExit(f"{tf}: OHLC timestamps are not unique and chronological.")
+              bar_set = set(stamps)
+              daily = {}
+              for stamp in stamps:
+                  day = stamp[:10].replace("-", "")
+                  daily[day] = daily.get(day, 0) + 1
+              if daily != meta.get("daily_bar_counts"):
+                  raise SystemExit(f"{tf}: OHLC daily counts differ from metadata.")
+              if set(section.get("strategies", {})) != set(strategies):
+                  raise SystemExit(f"{tf}: strategy definitions are incomplete.")
+              ready = 0
+              for strategy in strategies:
+                  item = section["strategies"][strategy]
+                  if item.get("status") == "not_testable":
+                      if not item.get("error"):
+                          raise SystemExit(f"{tf}/{strategy}: missing non-testable reason.")
+                      print(f"{tf}/{strategy}: not testable: {item['error']}")
+                      continue
+                  if item.get("status") != "ready":
+                      raise SystemExit(f"{tf}/{strategy}: invalid preparation status.")
+                  strategy_dir = root / tf / "strategies" / strategy
+                  metadata = json.loads((strategy_dir / "metadata.json").read_text(encoding="utf-8"))
+                  signals = json.loads((strategy_dir / "signals.json").read_text(encoding="utf-8"))
+                  if metadata.get("strategy") != strategy or metadata.get("decision_only") is not True:
+                      raise SystemExit(f"{tf}/{strategy}: decision-only metadata mismatch.")
+                  if metadata.get("market_data_source") != source:
+                      raise SystemExit(f"{tf}/{strategy}: provider mismatch.")
+                  if int(metadata.get("bars_count", -1)) != len(bars):
+                      raise SystemExit(f"{tf}/{strategy}: prepared history length mismatch.")
+                  if len(signals) != int(metadata.get("signals_count", -1)):
+                      raise SystemExit(f"{tf}/{strategy}: decision count mismatch.")
+                  signal_times = [
+                      datetime.fromisoformat(str(event["signal_time"]).replace("Z", "+00:00"))
+                      .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+                      for event in signals
+                  ]
+                  if any(stamp not in bar_set for stamp in signal_times):
+                      raise SystemExit(f"{tf}/{strategy}: a decision does not map to original OHLC.")
+                  if signal_times != sorted(signal_times) or len(signal_times) != len(set(signal_times)):
+                      raise SystemExit(f"{tf}/{strategy}: decisions are not unique and ordered.")
+                  ready += 1
+              if ready == 0:
+                  raise SystemExit(f"{tf}: no strategy is eligible for LEAN execution.")
+              print(f"{tf}: verified {len(bars)} real OHLC bars; {ready}/{len(strategies)} strategies ready.")
+          print("REAL_HISTORICAL_STRATEGY_LAB_INPUTS_VERIFIED")
+          PY
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force
+
+      - name: Prepare standalone LEAN runtime
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-lab
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEAN_DIR/Algorithm.Python" "$LEAN_DIR/config"
+          cp lean_smoke/LeanBacktestAlgorithm.py "$LEAN_DIR/Algorithm.Python/"
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/QuantConnect/Lean/master/Launcher/config.json \
+            --output "$LEAN_DIR/config/lean.json"
+          python - "$LEAN_DIR/config/lean.json" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          config = path.read_text()
+          replacements = {
+              '"algorithm-type-name": "BasicTemplateFrameworkAlgorithm"':
+                  '"algorithm-type-name": "LeanBacktestAlgorithm"',
+              '"algorithm-language": "CSharp"': '"algorithm-language": "Python"',
+              '"algorithm-location": "QuantConnect.Algorithm.CSharp.dll"':
+                  '"algorithm-location": "../../../Algorithm.Python/LeanBacktestAlgorithm.py"',
+          }
+          for old, new in replacements.items():
+              if old not in config:
+                  raise SystemExit(f"LEAN config template changed; missing {old}")
+              config = config.replace(old, new, 1)
+          path.write_text(config)
+          PY
+
+      - name: Pull official LEAN engine
+        run: docker pull --platform linux/arm64 quantconnect/lean:latest
+
+      - name: Execute every eligible strategy inside LEAN
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-lab
+          PREPARED_DIR: ${{ runner.temp }}/lean-lab/input
+          TIMEFRAMES: ${{ inputs.timeframes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEAN_DIR/results"
+          for tf in 5m 15m 1h; do
+            if [ "$TIMEFRAMES" != "all" ] && [[ ",$TIMEFRAMES," != *",$tf,"* ]]; then continue; fi
+            for strategy in baseline trend_pullback breakout_retest momentum_continuation; do
+              STRATEGY_INPUT="$PREPARED_DIR/$tf/strategies/$strategy"
+              if [ ! -f "$STRATEGY_INPUT/metadata.json" ]; then
+                echo "Skipping $tf/$strategy: walk-forward model was not testable."
+                continue
+              fi
+              RESULT_DIR="$LEAN_DIR/results/$tf/$strategy"
+              mkdir -p "$RESULT_DIR"
+              rm -rf "$LEAN_DIR/Algorithm.Python/input"
+              mkdir -p "$LEAN_DIR/Algorithm.Python/input"
+              cp "$PREPARED_DIR/$tf/bars.csv" "$LEAN_DIR/Algorithm.Python/input/bars.csv"
+              cp "$STRATEGY_INPUT/metadata.json" "$LEAN_DIR/Algorithm.Python/input/metadata.json"
+              cp "$STRATEGY_INPUT/signals.json" "$LEAN_DIR/Algorithm.Python/input/signals.json"
+              echo "Running LEAN: $tf / $strategy"
+              docker run --rm --platform linux/arm64 \
+                --volume "$LEAN_DIR/Algorithm.Python:/Lean/Algorithm.Python:ro" \
+                --volume "$LEAN_DIR/config/lean.json:/Lean/Launcher/config.json:ro" \
+                --volume "$RESULT_DIR:/Results" \
+                quantconnect/lean:latest \
+                --results-destination-folder /Results \
+                --config /Lean/Launcher/config.json 2>&1 | tee "$RESULT_DIR/lean-engine.log"
+              test -s "$RESULT_DIR/lean_report.json"
+            done
+          done
+
+      - name: Build verified LEAN strategy research report
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-lab
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          python scripts/summarize_lean_strategy_lab.py \
+            --prepared-dir "$LEAN_DIR/input" \
+            --results-dir "$LEAN_DIR/results" \
+            --output-dir "$LEAN_DIR/report" \
+            --request-id "$REQUEST_ID" --asset "$ASSET"
+
+      - name: Upload LEAN strategy-lab diagnostics on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-strategy-lab-diagnostics-${{ inputs.request_id }}
+          path: |
+            ${{ runner.temp }}/lean-lab/input/
+            ${{ runner.temp }}/lean-lab/results/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Upload verified LEAN strategy-lab report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-strategy-lab-${{ inputs.request_id }}
+          path: ${{ runner.temp }}/lean-lab/report/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Notify Render so the LEAN lab report is delivered to Telegram
+        if: always()
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os, time, urllib.parse
+          import requests
+          base = os.environ["CALLBACK_URL"].rstrip("/")
+          parsed = urllib.parse.urlparse(base)
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("Callback URL must use HTTPS")
+          payload = {"request_id": os.environ["REQUEST_ID"], "run_id": int(os.environ["RUN_ID"])}
+          last = None
+          for attempt in range(8):
+              try:
+                  response = requests.post(
+                      base, json=payload,
+                      headers={"Content-Type": "application/json"},
+                      timeout=(10, 30),
+                  )
+                  if response.ok:
+                      print("Render accepted the LEAN strategy-lab completion callback")
+                      break
+                  last = f"HTTP {response.status_code}: {response.text[:300]}"
+              except Exception as exc:
+                  last = f"{type(exc).__name__}: {exc}"
+              time.sleep(min(5 * (attempt + 1), 30))
+          else:
+              raise SystemExit(f"Render callback failed after retries: {last}")
+          PY
+          if [ -f "$RUNNER_TEMP/lean-lab-render-keepalive.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/lean-lab-render-keepalive.pid")" || true
+          fi

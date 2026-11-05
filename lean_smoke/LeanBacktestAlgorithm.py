@@ -348,6 +348,7 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "asset_key": self.metadata["asset_key"],
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
+            "strategy": self.metadata.get("strategy", "baseline"),
             "market_data_source": self.metadata.get("market_data_source", ""),
             "history_start_utc": self.metadata.get("start", ""),
             "history_end_utc": self.metadata.get("end", ""),
