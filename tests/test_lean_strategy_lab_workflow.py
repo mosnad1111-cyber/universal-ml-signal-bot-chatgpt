@@ -16,7 +16,7 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         backtest = (ROOT / "backtest.py").read_text(encoding="utf-8")
         self.assertIn("decision_only=False", backtest)
         self.assertIn("if decision_only:", backtest)
-        self.assertIn("Python trade resolver", backtest)
+        self.assertLess(backtest.index("if decision_only:"), backtest.index("self._resolve(raw, start, setup)"))
         self.assertIn("lean_events.append", backtest)
 
         preparation = (ROOT / "scripts/prepare_lean_strategy_lab.py").read_text(encoding="utf-8")
