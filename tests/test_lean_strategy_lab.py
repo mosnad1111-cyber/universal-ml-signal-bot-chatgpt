@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +26,21 @@ class LeanStrategyLabTests(unittest.TestCase):
             "Close": [100.5, 101.5, 102.5],
             "Volume": [0.0, 0.0, 0.0],
         }, index=self.index)
+
+    def test_summarizer_cli_imports_project_module_outside_repo_cwd(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "summarize_lean_strategy_lab.py"
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            cwd=self.temp.name,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("--prepared-dir", result.stdout)
 
     def test_writes_one_chronological_real_ohlc_stream(self):
         count, daily = _write_bars(self.tf_dir, self.raw)
