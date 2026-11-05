@@ -346,12 +346,23 @@ class LeanActionsClient:
         except (TypeError, json.JSONDecodeError):
             return {"ok": False, "error": "invalid_pending_request"}, 409
 
-        if self.db.get_setting(f"lean_delivered:{run_id}") == "1":
-            return {"ok": True, "duplicate": True}, 200
-
         strategy_lab = pending.get("mode") == "strategy_lab"
         try:
             run = self._get_json(f"{self.api_base}/actions/runs/{int(run_id)}")
+            # GitHub re-runs keep the same run_id and increment run_attempt.
+            # A failed first attempt may already have delivered its failure
+            # notification, but that must not suppress the later success report.
+            run_attempt = int(run.get("run_attempt", 1) or 1)
+            if run_attempt < 1:
+                raise LeanActionsError("GitHub workflow run attempt is invalid.")
+            delivery_key = f"lean_delivered:{run_id}:{run_attempt}"
+            legacy_delivery_key = f"lean_delivered:{run_id}"
+            if (
+                self.db.get_setting(delivery_key) == "1"
+                or (run_attempt == 1 and self.db.get_setting(legacy_delivery_key) == "1")
+            ):
+                return {"ok": True, "duplicate": True}, 200
+
             expected_workflow = LAB_WORKFLOW_FILE if strategy_lab else WORKFLOW_FILE
             if run.get("path") != f".github/workflows/{expected_workflow}":
                 raise LeanActionsError("Workflow path does not match the requested LEAN task.")
@@ -400,7 +411,9 @@ class LeanActionsClient:
                 )
                 if not telegram.send(message, chat_id):
                     raise LeanActionsError("تعذر إرسال إشعار فشل LEAN إلى Telegram.")
-                self.db.set_setting(f"lean_delivered:{run_id}", "1")
+                self.db.set_setting(delivery_key, "1")
+                if run_attempt == 1:
+                    self.db.set_setting(legacy_delivery_key, "1")
                 self.db.set_setting(pending_key, json.dumps({**pending, "status": "failed", "run_id": run_id}))
                 if self.db.get_setting("lean_active_request") == request_id:
                     self.db.set_setting("lean_active_request", "")
@@ -470,7 +483,9 @@ class LeanActionsClient:
                 report_text = self.format_report(summary)
             if not telegram.send_long(report_text, chat_id):
                 raise LeanActionsError("تعذر إرسال تقرير LEAN كاملًا إلى Telegram.")
-            self.db.set_setting(f"lean_delivered:{run_id}", "1")
+            self.db.set_setting(delivery_key, "1")
+            if run_attempt == 1:
+                self.db.set_setting(legacy_delivery_key, "1")
             self.db.set_setting(pending_key, json.dumps({**pending, "status": "completed", "run_id": run_id}))
             if self.db.get_setting("lean_active_request") == request_id:
                 self.db.set_setting("lean_active_request", "")
