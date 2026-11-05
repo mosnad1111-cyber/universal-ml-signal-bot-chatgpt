@@ -15,7 +15,15 @@ import requests
 
 DEFAULT_REPOSITORY = "mosnad1111-cyber/universal-ml-signal-bot-chatgpt"
 WORKFLOW_FILE = "lean-real-backtest.yml"
+LAB_WORKFLOW_FILE = "lean-strategy-lab.yml"
 WORKFLOW_NAME = "LEAN real market backtest"
+LAB_STRATEGIES = ("baseline", "trend_pullback", "breakout_retest", "momentum_continuation")
+LAB_STRATEGY_NAMES = {
+    "baseline": "الاستراتيجية الحالية",
+    "trend_pullback": "الارتداد داخل الاتجاه",
+    "breakout_retest": "اختراق ثم إعادة اختبار",
+    "momentum_continuation": "استمرار الزخم",
+}
 REQUEST_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 ALLOWED_ASSETS = {"GOLD", "BTC"}
 ALLOWED_TIMEFRAMES = {"5m", "15m", "1h"}
@@ -90,6 +98,35 @@ class LeanActionsClient:
                 f"GitHub رفض تشغيل LEAN ({response.status_code}). {detail}"
             )
 
+    def dispatch_strategy_lab(self, request_id: str, asset_key: str, timeframes: list[str]) -> None:
+        """Start the real-history strategy lab; each candidate is executed by LEAN."""
+        if not REQUEST_ID_RE.fullmatch(request_id or ""):
+            raise LeanActionsError("معرّف المختبر غير صالح.")
+        self.validate_request(asset_key, timeframes)
+        if not self.configured:
+            raise LeanActionsError(
+                "يلزم إعداد GITHUB_ACTIONS_TOKEN ووجود رابط Render HTTPS قبل تشغيل مختبر LEAN."
+            )
+        response = self.session.post(
+            f"{self.api_base}/actions/workflows/{LAB_WORKFLOW_FILE}/dispatches",
+            headers=self._headers(),
+            json={
+                "ref": "main",
+                "inputs": {
+                    "asset": asset_key,
+                    "timeframes": ",".join(timeframes),
+                    "request_id": request_id,
+                    "callback_url": self.callback_base_url + "/lean-backtest/callback",
+                },
+            },
+            timeout=(10, 30),
+        )
+        if response.status_code != 204:
+            detail = (getattr(response, "text", "") or "")[:500]
+            raise LeanActionsError(
+                f"GitHub رفض تشغيل مختبر LEAN ({response.status_code}). {detail}"
+            )
+
     def _get_json(self, url: str) -> dict[str, Any]:
         response = self.session.get(url, headers=self._headers(), timeout=(10, 45))
         response.raise_for_status()
@@ -98,9 +135,12 @@ class LeanActionsClient:
             raise LeanActionsError("استجابة GitHub غير متوقعة.")
         return payload
 
-    def _read_artifact(self, run_id: int, request_id: str) -> dict[str, Any]:
+    def _read_artifact(self, run_id: int, request_id: str, strategy_lab: bool = False) -> dict[str, Any]:
         artifacts_payload = self._get_json(f"{self.api_base}/actions/runs/{run_id}/artifacts")
-        expected_name = f"lean-real-backtest-{request_id}"
+        expected_name = (
+            f"lean-strategy-lab-{request_id}" if strategy_lab
+            else f"lean-real-backtest-{request_id}"
+        )
         artifact = next(
             (
                 item for item in artifacts_payload.get("artifacts", [])
@@ -198,6 +238,98 @@ class LeanActionsClient:
             "⚠️ الذهب يستخدم شموع OHLC فعلية من Dukascopy، لكن Volume في تغذية المشروع قيمة محايدة وليست حجم تداول حقيقي.",
             "ℹ️ تُستبعد شموع يوم UTC الحالي عمدًا لأن LEAN يقفل تاريخ النهاية عند آخر يوم مكتمل؛ تدريب XGBoost والتنفيذ داخل LEAN يستخدمان النافذة التاريخية نفسها.",
             "⚠️ هذا باكتيست تاريخي، وليس تنفيذًا حقيقيًا لدى وسيط أو ضمانًا للأرباح. اختبر على Paper Trading قبل أي تداول حي.",
+        ])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_lab_metric(metric: dict[str, Any]) -> str:
+        if not metric or not int(metric.get("trades", 0)):
+            return "0 صفقة محسومة"
+        pf = metric.get("profit_factor", 0.0)
+        if pf in ("Infinity", "inf", "∞") or (isinstance(pf, (int, float)) and math.isinf(float(pf))):
+            pf_text = "∞"
+        elif pf is None:
+            pf_text = "—"
+        else:
+            pf_text = f"{float(pf):.2f}"
+        return (
+            f"{int(metric.get('trades', 0))} صفقة | "
+            f"فوز {float(metric.get('win_rate', 0.0)):.1f}% | "
+            f"Gross {float(metric.get('net_r', 0.0)):+.2f}R | "
+            f"PF {pf_text} | "
+            f"DD {float(metric.get('max_drawdown_r', 0.0)):.2f}R"
+        )
+
+    @classmethod
+    def format_strategy_lab_report(cls, summary: dict[str, Any]) -> str:
+        asset_labels = {"GOLD": "الذهب XAU/USD", "BTC": "البيتكوين BTC/USDT"}
+        names = summary.get("strategy_names") or LAB_STRATEGY_NAMES
+        lines = [
+            "🧭 <b>مختبر الاستراتيجيات — تنفيذ LEAN تاريخي حقيقي</b>",
+            f"الأصل: <b>{html.escape(asset_labels.get(summary.get('asset_key', ''), str(summary.get('asset_key', ''))))}</b>",
+            f"المحرك: <b>{html.escape(str(summary.get('engine', 'QuantConnect LEAN')))}</b>",
+            "كل استراتيجية لها Walk-Forward مستقل؛ Python يجهّز قرارات الدخول فقط، وLEAN ينفّذ الصفقات ويحدد نتائجها.",
+            "المعايرة والاحتجاز محسوبتان من سجل صفقات LEAN؛ الصفقات العابرة لنقطة الفصل لا تدخل في أي مجموعة.",
+            "",
+        ]
+        for section in summary.get("timeframes", []):
+            common = section.get("metadata", {})
+            tf = html.escape(str(common.get("timeframe", "?")))
+            source = html.escape(str(common.get("market_data_source", "غير معروف")))
+            lines.extend([
+                f"⏱️ <b>{tf}</b>",
+                f"المصدر: {source}",
+                f"الشموع: {int(common.get('raw_bars', 0)):,} خام / "
+                f"{int(common.get('completed_bars', 0)):,} مكتملة / "
+                f"{int(common.get('usable_bars', 0)):,} مستخدمة",
+                f"الفترة UTC: {html.escape(str(common.get('snapshot_start', '—')))} → "
+                f"{html.escape(str(common.get('snapshot_end', '—')))}",
+                f"نقطة الفصل: {html.escape(str(common.get('midpoint', '—')))}",
+            ])
+            if common.get("history_partial"):
+                lines.append("⚠️ التاريخ المتاح أقل من العدد المطلوب.")
+            if common.get("volume_note"):
+                lines.append(f"ملاحظة الحجم: {html.escape(str(common['volume_note']))}")
+            for strategy in LAB_STRATEGIES:
+                result = section.get("results", {}).get(strategy, {})
+                label = html.escape(str(names.get(strategy, LAB_STRATEGY_NAMES[strategy])))
+                lines.append(f"<b>{label}</b>")
+                if result.get("status") == "not_testable":
+                    lines.append("  ⚪ لم يصل النموذج إلى عينة Walk-Forward قابلة للاختبار داخل LEAN.")
+                    lines.append(f"  السبب: {html.escape(str(result.get('error', 'غير محدد'))[:240])}")
+                    continue
+                if result.get("status") != "executed":
+                    lines.append("  ❌ نتيجة الاستراتيجية غير متاحة أو لم يتم التحقق منها.")
+                    continue
+                lines.append("  المعايرة: " + cls._format_lab_metric(result.get("calibration", {})))
+                lines.append("  الاحتجازي: " + cls._format_lab_metric(result.get("holdout", {})))
+                c05 = result.get("holdout_cost_005R", {})
+                c10 = result.get("holdout_cost_010R", {})
+                lines.append(
+                    f"  صافي الاحتجاز بعد التكلفة: {float(c05.get('net_after_cost_r', 0.0)):+.2f}R "
+                    f"عند 0.05R/صفقة؛ {float(c10.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R/صفقة"
+                )
+                report = result.get("lean_report", {})
+                lines.append(
+                    f"  قرارات الاستراتيجية: {int(result.get('signals_count', 0))} | "
+                    f"صفقات LEAN المنفذة: {int(report.get('trades', 0))} | "
+                    f"غير مفعّلة: {int(result.get('unfilled_setups', 0))} | "
+                    f"غير محسومة: {int(result.get('unresolved_trades', 0))}"
+                )
+                fit = result.get("model_fit_diagnostics", {})
+                if fit.get("fit_failures") or fit.get("model_unavailable_candles"):
+                    lines.append(
+                        f"  التدريب: {int(fit.get('fit_attempts', 0))} محاولة، "
+                        f"{int(fit.get('fit_failures', 0))} فشل إعادة تدريب، "
+                        f"{int(fit.get('model_unavailable_candles', 0))} شمعة بلا نموذج"
+                    )
+                if int(result.get("holdout", {}).get("trades", 0)) < 30:
+                    lines.append("  ⚠️ أقل من 30 صفقة في الاحتجاز؛ العينة ضعيفة للحكم.")
+            lines.append("")
+        lines.extend([
+            "تكلفة LEAN الأساسية افتراض 0.05R لكل صفقة مغلقة؛ حساسية 0.10R سيناريو إضافي وليست بيانات سبريد أو عمولات وسيط فعلية.",
+            "المختبر لا يفعّل استراتيجية تلقائيًا. يلزم احتجاز موجب بعد التكلفة، PF مناسب، تراجع مقبول، وعدد صفقات كافٍ، ثم فترة مستقبلية مستقلة قبل التداول.",
+            "هذا بحث تاريخي وليس ضمانًا للأرباح أو توصية تداول.",
         ])
         return "\n".join(lines)
 
