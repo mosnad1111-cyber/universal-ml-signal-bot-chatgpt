@@ -113,6 +113,15 @@ def _validate_execution(metadata: dict, report: dict, request_id: str,
         raise SystemExit(f"{timeframe}/{strategy}: LEAN win/loss totals do not reconcile.")
 
 
+def _json_safe_metrics(metrics: dict) -> dict:
+    """Keep JSON standards-compliant when profit factor is mathematically infinite."""
+    safe = dict(metrics)
+    for key, value in safe.items():
+        if isinstance(value, float) and not math.isfinite(value):
+            safe[key] = "Infinity" if value > 0 else ("-Infinity" if value < 0 else None)
+    return safe
+
+
 def _strategy_metrics(metadata: dict, report: dict) -> dict:
     trades = [
         {
@@ -125,11 +134,11 @@ def _strategy_metrics(metadata: dict, report: dict) -> dict:
     midpoint = _utc(metadata["midpoint"])
     calibration, holdout = split_completed_trades(trades, midpoint)
     return {
-        "all": summarize_trades(trades, 0.0),
-        "calibration": summarize_trades(calibration, 0.0),
-        "holdout": summarize_trades(holdout, 0.0),
-        "holdout_cost_005R": summarize_trades(holdout, 0.05),
-        "holdout_cost_010R": summarize_trades(holdout, 0.10),
+        "all": _json_safe_metrics(summarize_trades(trades, 0.0)),
+        "calibration": _json_safe_metrics(summarize_trades(calibration, 0.0)),
+        "holdout": _json_safe_metrics(summarize_trades(holdout, 0.0)),
+        "holdout_cost_005R": _json_safe_metrics(summarize_trades(holdout, 0.05)),
+        "holdout_cost_010R": _json_safe_metrics(summarize_trades(holdout, 0.10)),
         "setup_candidates": int(metadata.get("setup_candidates", metadata.get("signals_count", 0))),
         "signals_count": int(metadata.get("signals_count", 0)),
         "model_fit_diagnostics": metadata.get("model_fit_diagnostics", {}),
