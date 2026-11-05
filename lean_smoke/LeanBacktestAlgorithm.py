@@ -2,6 +2,7 @@ from AlgorithmImports import *
 
 import csv
 import json
+import math
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -125,7 +126,43 @@ class LeanBacktestAlgorithm(QCAlgorithm):
         self.set_time_zone(TimeZones.UTC)
         self.set_start_date(start.year, start.month, start.day)
         self.set_end_date(end.year, end.month, end.day)
-        self.set_cash(100000)
+        max_ohlc_price = float(self.metadata.get("max_ohlc_price", 0.0) or 0.0)
+        cash_buffer = float(self.metadata.get("lean_cash_buffer_multiplier", 1.5))
+        if max_ohlc_price <= 0:
+            # Older real-backtest inputs and the LEAN smoke fixture do not
+            # carry precomputed capital metadata. Derive it directly from the
+            # exact OHLC stream LEAN is about to replay.
+            max_ohlc_price = 0.0
+            with open(os.path.join(INPUT_DIR, "bars.csv"), newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    try:
+                        bar_max = max(float(row[key]) for key in ("open", "high", "low", "close"))
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError(f"Cannot size LEAN buying power from OHLC input: {exc}") from exc
+                    if not math.isfinite(bar_max) or bar_max <= 0:
+                        raise ValueError("Cannot size LEAN buying power from invalid/non-positive OHLC price.")
+                    max_ohlc_price = max(max_ohlc_price, bar_max)
+        configured_cash = self.metadata.get("lean_initial_cash_usd")
+        if configured_cash is None:
+            self.initial_cash_usd = float(
+                math.ceil(max(100_000.0, max_ohlc_price * cash_buffer) / 1000.0) * 1000.0
+            )
+        else:
+            self.initial_cash_usd = float(configured_cash)
+        if (
+            not math.isfinite(self.initial_cash_usd)
+            or not math.isfinite(max_ohlc_price)
+            or not math.isfinite(cash_buffer)
+            or self.initial_cash_usd <= 0
+            or max_ohlc_price <= 0
+            or cash_buffer < 1.0
+            or self.initial_cash_usd < max_ohlc_price * cash_buffer
+        ):
+            raise ValueError("Invalid LEAN initial cash/buying-power metadata for one-unit OHLC replay.")
+        # Order quantity remains exactly +/-1 unit. Cash is sized from the
+        # observed OHLC maximum so LEAN's buying-power model can validate that
+        # unit across the entire real historical window (including BTC >$100k).
+        self.set_cash(self.initial_cash_usd)
 
         tf = self.metadata["timeframe"]
         # Each CSV row is already a complete OHLC bar with its true interval in
@@ -349,6 +386,10 @@ class LeanBacktestAlgorithm(QCAlgorithm):
             "symbol": self.metadata["symbol"],
             "timeframe": self.metadata["timeframe"],
             "strategy": self.metadata.get("strategy", "baseline"),
+            "initial_cash_usd": float(self.initial_cash_usd),
+            "max_ohlc_price": float(self.metadata.get("max_ohlc_price", 0.0)),
+            "position_quantity_units": float(self.metadata.get("lean_position_units", 1.0)),
+            "cash_buffer_multiplier": float(self.metadata.get("lean_cash_buffer_multiplier", 1.5)),
             "market_data_source": self.metadata.get("market_data_source", ""),
             "history_start_utc": self.metadata.get("start", ""),
             "history_end_utc": self.metadata.get("end", ""),

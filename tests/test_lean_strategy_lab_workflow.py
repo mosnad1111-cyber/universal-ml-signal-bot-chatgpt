@@ -33,12 +33,19 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         self.assertIn("momentum_continuation", workflow)
         self.assertIn("prepare_lean_strategy_lab.py", workflow)
         self.assertIn("summarize_lean_strategy_lab.py", workflow)
+        preparation = (ROOT / "scripts/prepare_lean_strategy_lab.py").read_text(encoding="utf-8")
+        self.assertIn("_lean_capital_requirements(raw)", preparation)
+        self.assertIn('"lean_initial_cash_usd"', preparation)
         self.assertIn("lean-strategy-lab-" + "$" + "{{ inputs.request_id }}", workflow)
         self.assertNotIn("create_lean_fixture.py", workflow)
 
     def test_lean_report_records_the_strategy_that_was_executed(self):
         algorithm = (ROOT / "lean_smoke/LeanBacktestAlgorithm.py").read_text(encoding="utf-8")
         self.assertIn('"strategy": self.metadata.get("strategy", "baseline")', algorithm)
+        self.assertIn('self.set_cash(self.initial_cash_usd)', algorithm)
+        self.assertIn('max_ohlc_price = float(self.metadata.get("max_ohlc_price", 0.0) or 0.0)', algorithm)
+        self.assertIn('os.path.join(INPUT_DIR, "bars.csv")', algorithm)
+        self.assertIn('"initial_cash_usd": float(self.initial_cash_usd)', algorithm)
 
 
 if __name__ == "__main__":
