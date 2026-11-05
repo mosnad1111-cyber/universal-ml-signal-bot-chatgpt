@@ -33,7 +33,7 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         self.assertIn("momentum_continuation", workflow)
         self.assertIn("prepare_lean_strategy_lab.py", workflow)
         self.assertIn("summarize_lean_strategy_lab.py", workflow)
-        self.assertIn("lean-strategy-lab-GH_INPUTS_REQUEST_ID", workflow)
+        self.assertIn("lean-strategy-lab-" + "$" + "{{ inputs.request_id }}", workflow)
         self.assertNotIn("create_lean_fixture.py", workflow)
 
     def test_lean_report_records_the_strategy_that_was_executed(self):
