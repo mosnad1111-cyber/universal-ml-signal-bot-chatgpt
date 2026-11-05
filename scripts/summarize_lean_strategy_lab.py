@@ -6,6 +6,14 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
+
+# Direct execution (python scripts/...) puts only the scripts directory on
+# sys.path. Add the repository root so sibling top-level modules are importable
+# in GitHub Actions and other callers regardless of their working directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from strategy_lab import STRATEGIES, STRATEGY_NAMES, split_completed_trades, summarize_trades
 
