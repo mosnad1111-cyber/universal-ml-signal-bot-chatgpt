@@ -101,9 +101,6 @@ class LeanActionsTests(unittest.TestCase):
         db = FakeDB({
             "telegram_chat_id": "12345",
             "lean_active_request": request_id,
-            # Simulate the failure notification sent by attempt 1. Attempt 2
-            # must still be allowed to deliver the verified success report.
-            "lean_delivered:456": "1",
             f"lean_request:{request_id}": json.dumps({
                 "chat_id": "12345", "asset_key": "GOLD", "timeframes": ["5m"],
                 "status": "dispatched",
@@ -197,6 +194,9 @@ class LeanActionsTests(unittest.TestCase):
         db = FakeDB({
             "telegram_chat_id": "12345",
             "lean_active_request": request_id,
+            # Simulate the failure notification sent by attempt 1. Attempt 2
+            # must still be allowed to deliver the verified success report.
+            "lean_delivered:456": "1",
             f"lean_request:{request_id}": json.dumps({
                 "chat_id": "12345",
                 "asset_key": "GOLD",
