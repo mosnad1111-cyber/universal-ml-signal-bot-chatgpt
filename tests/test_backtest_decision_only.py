@@ -8,7 +8,7 @@ from backtest import GoldBacktest
 
 class BacktestDecisionOnlyTests(unittest.TestCase):
     def test_decision_only_exports_all_setups_without_resolving_python_trades(self):
-        index = pd.date_range("2026-10-01T00:00:00Z", periods=704, freq="5min")
+        index = pd.date_range("2026-10-01T00:00:00Z", periods=1204, freq="5min")
         raw = pd.DataFrame({
             "Open": [100.0] * len(index),
             "High": [101.0] * len(index),
@@ -29,9 +29,9 @@ class BacktestDecisionOnlyTests(unittest.TestCase):
             "market_data_warning": "",
         }
         predictions = {
-            700: {"BUY": 0.8, "SELL": 0.2},
-            701: {"BUY": 0.8, "SELL": 0.2},
-            702: {"BUY": 0.8, "SELL": 0.2},
+            1200: {"BUY": 0.8, "SELL": 0.2},
+            1201: {"BUY": 0.8, "SELL": 0.2},
+            1202: {"BUY": 0.8, "SELL": 0.2},
             "_diagnostics": {"fit_attempts": 2, "fit_failures": 0},
         }
         setup = {
@@ -67,7 +67,7 @@ class BacktestDecisionOnlyTests(unittest.TestCase):
         self.assertEqual(build_setup.call_count, 3)
         self.assertEqual(
             [event["signal_time"] for event in result["lean_events"]],
-            [index[i].isoformat() for i in (700, 701, 702)],
+            [index[i].isoformat() for i in (1200, 1201, 1202)],
         )
         self.assertEqual(len(result["market_bars"]), len(raw))
 
