@@ -286,6 +286,9 @@ class LeanActionsClient:
                 f"الفترة UTC: {html.escape(str(common.get('snapshot_start', '—')))} → "
                 f"{html.escape(str(common.get('snapshot_end', '—')))}",
                 f"نقطة الفصل: {html.escape(str(common.get('midpoint', '—')))}",
+                f"رصيد LEAN الفني: ${float(common.get('lean_initial_cash_usd', 100000.0)):,.0f} لتغطية وحدة واحدة "
+                f"مع هامش {float(common.get('lean_cash_buffer_multiplier', 1.5)) * 100 - 100:.0f}%؛ "
+                "كمية كل دخول/خروج ثابتة عند وحدة واحدة.",
             ])
             if common.get("history_partial"):
                 lines.append("⚠️ التاريخ المتاح أقل من العدد المطلوب.")
