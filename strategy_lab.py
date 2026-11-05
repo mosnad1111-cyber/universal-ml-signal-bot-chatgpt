@@ -65,16 +65,25 @@ def summarize_trades(trades, cost_r=0.0):
     }
 
 
+def _utc_timestamp(value):
+    """Normalize timestamps to UTC so naive and offset-aware inputs compare safely."""
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
+
+
 def split_completed_trades(trades, midpoint):
     """Avoid calibration leakage: calibration trades must also exit before the split."""
+    midpoint = _utc_timestamp(midpoint)
     calibration, holdout = [], []
     for trade in trades:
         signal_time = trade.get("time")
         exit_time = trade.get("exit_time")
         if not signal_time or not exit_time:
             continue
-        signal_time = pd.Timestamp(signal_time)
-        exit_time = pd.Timestamp(exit_time)
+        signal_time = _utc_timestamp(signal_time)
+        exit_time = _utc_timestamp(exit_time)
         if signal_time <= midpoint and exit_time <= midpoint:
             calibration.append(trade)
         elif signal_time > midpoint:
