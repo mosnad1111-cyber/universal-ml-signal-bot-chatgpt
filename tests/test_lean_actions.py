@@ -101,6 +101,9 @@ class LeanActionsTests(unittest.TestCase):
         db = FakeDB({
             "telegram_chat_id": "12345",
             "lean_active_request": request_id,
+            # Simulate the failure notification sent by attempt 1. Attempt 2
+            # must still be allowed to deliver the verified success report.
+            "lean_delivered:456": "1",
             f"lean_request:{request_id}": json.dumps({
                 "chat_id": "12345", "asset_key": "GOLD", "timeframes": ["5m"],
                 "status": "dispatched",
@@ -209,6 +212,7 @@ class LeanActionsTests(unittest.TestCase):
                 "event": "workflow_dispatch",
                 "display_title": f"LEAN strategy lab {request_id}",
                 "head_branch": "main",
+                "run_attempt": 2,
                 "status": "in_progress",
                 "conclusion": None,
                 "html_url": "https://github.com/owner/repo/actions/runs/456",
@@ -280,6 +284,7 @@ class LeanActionsTests(unittest.TestCase):
         client._read_artifact.assert_called_once_with(456, request_id, strategy_lab=True)
         self.assertEqual(db.get_setting("lean_active_request"), "")
         self.assertEqual(db.get_setting("lean_delivered:456"), "1")
+        self.assertEqual(db.get_setting("lean_delivered:456:2"), "1")
 
 
 if __name__ == "__main__":
