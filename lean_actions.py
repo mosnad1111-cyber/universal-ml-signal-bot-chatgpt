@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import os
 import re
 import zipfile
@@ -348,13 +349,18 @@ class LeanActionsClient:
         if self.db.get_setting(f"lean_delivered:{run_id}") == "1":
             return {"ok": True, "duplicate": True}, 200
 
+        strategy_lab = pending.get("mode") == "strategy_lab"
         try:
             run = self._get_json(f"{self.api_base}/actions/runs/{int(run_id)}")
-            if run.get("path") != f".github/workflows/{WORKFLOW_FILE}":
-                raise LeanActionsError("Workflow path does not match the LEAN real-backtest workflow.")
+            expected_workflow = LAB_WORKFLOW_FILE if strategy_lab else WORKFLOW_FILE
+            if run.get("path") != f".github/workflows/{expected_workflow}":
+                raise LeanActionsError("Workflow path does not match the requested LEAN task.")
             if run.get("event") != "workflow_dispatch":
                 raise LeanActionsError("Only manually dispatched LEAN runs are accepted.")
-            expected_title = f"LEAN historical backtest {request_id}"
+            expected_title = (
+                f"LEAN strategy lab {request_id}" if strategy_lab
+                else f"LEAN historical backtest {request_id}"
+            )
             display_title = run.get("display_title")
             if display_title != expected_title:
                 raise LeanActionsError("Run title does not match the Telegram request.")
@@ -386,8 +392,9 @@ class LeanActionsClient:
                 return {"ok": False, "error": "workflow_not_ready"}, 409
 
             if failure_detail:
+                task_name = "مختبر الاستراتيجيات على LEAN" if strategy_lab else "باكتيست LEAN الحقيقي"
                 message = (
-                    "❌ <b>فشل باكتيست LEAN الحقيقي.</b>\n"
+                    f"❌ <b>فشل {task_name}.</b>\n"
                     f"المرحلة: {html.escape(failure_detail)}\n"
                     f"<a href=\"{html.escape(run.get('html_url', ''), quote=True)}\">سجل التشغيل على GitHub</a>"
                 )
@@ -400,7 +407,7 @@ class LeanActionsClient:
                 return {"ok": True, "workflow_conclusion": workflow_conclusion or "failure"}, 200
 
             # Artifact upload is the last successful step before this callback.
-            summary = self._read_artifact(int(run_id), request_id)
+            summary = self._read_artifact(int(run_id), request_id, strategy_lab=strategy_lab)
             if summary.get("synthetic_fixture") is not False:
                 raise LeanActionsError("رفض التقرير: وسم synthetic_fixture غير مطابق.")
             if summary.get("market_data_type") != "real_historical_ohlc":
@@ -413,16 +420,55 @@ class LeanActionsClient:
             got = {item.get("metadata", {}).get("timeframe") for item in timeframes}
             if got != set(expected_timeframes):
                 raise LeanActionsError("الفريمات الموجودة في التقرير لا تطابق الطلب.")
-            for item in timeframes:
-                meta = item.get("metadata", {})
-                report = item.get("lean_report", {})
-                if not meta.get("market_data_source") or int(meta.get("raw_bars", 0)) < 1200:
-                    raise LeanActionsError("البيانات التاريخية ناقصة أو مصدرها غير موثق.")
-                if int(report.get("bars", -1)) != int(report.get("received_bars", -2)):
-                    raise LeanActionsError("LEAN لم يستقبل جميع الشموع المجهزة.")
-                if report.get("order_errors"):
-                    raise LeanActionsError("LEAN سجّل أخطاء في تنفيذ الأوامر.")
-            if not telegram.send_long(self.format_report(summary), chat_id):
+            if strategy_lab:
+                if summary.get("report_type") != "LEAN real historical strategy research lab":
+                    raise LeanActionsError("نوع التقرير لا يطابق مختبر الاستراتيجيات على LEAN.")
+                for section in timeframes:
+                    common = section.get("metadata", {})
+                    if not common.get("market_data_source") or int(common.get("raw_bars", 0)) < 1200:
+                        raise LeanActionsError("التاريخ السوقي للمختبر ناقص أو غير موثق.")
+                    results = section.get("results") or {}
+                    if set(results) != set(LAB_STRATEGIES):
+                        raise LeanActionsError("قائمة استراتيجيات المختبر غير مكتملة.")
+                    executed = 0
+                    for strategy, result in results.items():
+                        if result.get("status") == "not_testable":
+                            if not result.get("error"):
+                                raise LeanActionsError(f"سبب عدم اختبار {strategy} غير موثق.")
+                            continue
+                        if result.get("status") != "executed":
+                            raise LeanActionsError(f"حالة استراتيجية {strategy} غير صالحة.")
+                        meta = result.get("metadata", {})
+                        report = result.get("lean_report", {})
+                        if meta.get("strategy") != strategy or report.get("strategy") != strategy:
+                            raise LeanActionsError(f"هوية استراتيجية {strategy} لا تطابق تقرير LEAN.")
+                        if meta.get("market_data_source") != common.get("market_data_source"):
+                            raise LeanActionsError(f"مصدر بيانات {strategy} لا يطابق تاريخ الفريم.")
+                        if int(meta.get("raw_bars", 0)) < 1200 or int(report.get("signals", -1)) != int(meta.get("signals_count", -2)):
+                            raise LeanActionsError(f"بيانات أو إشارات {strategy} غير مكتملة.")
+                        expected_bars = int(meta.get("bars_count", -1))
+                        if not (expected_bars == int(report.get("bars", -2)) == int(report.get("received_bars", -3))):
+                            raise LeanActionsError(f"LEAN لم يستقبل كل شموع {strategy}.")
+                        if int(report.get("reader_parsed_rows", -1)) != expected_bars or int(report.get("reader_unique_timestamps", -1)) != expected_bars:
+                            raise LeanActionsError(f"فشل التحقق من صفوف OHLC داخل LEAN لاستراتيجية {strategy}.")
+                        if report.get("order_errors"):
+                            raise LeanActionsError(f"LEAN سجّل أخطاء أوامر في {strategy}.")
+                        executed += 1
+                    if executed == 0:
+                        raise LeanActionsError("لا توجد استراتيجية قابلة للتنفيذ والتحقق في هذا الفريم.")
+                report_text = self.format_strategy_lab_report(summary)
+            else:
+                for item in timeframes:
+                    meta = item.get("metadata", {})
+                    report = item.get("lean_report", {})
+                    if not meta.get("market_data_source") or int(meta.get("raw_bars", 0)) < 1200:
+                        raise LeanActionsError("البيانات التاريخية ناقصة أو مصدرها غير موثق.")
+                    if int(report.get("bars", -1)) != int(report.get("received_bars", -2)):
+                        raise LeanActionsError("LEAN لم يستقبل جميع الشموع المجهزة.")
+                    if report.get("order_errors"):
+                        raise LeanActionsError("LEAN سجّل أخطاء في تنفيذ الأوامر.")
+                report_text = self.format_report(summary)
+            if not telegram.send_long(report_text, chat_id):
                 raise LeanActionsError("تعذر إرسال تقرير LEAN كاملًا إلى Telegram.")
             self.db.set_setting(f"lean_delivered:{run_id}", "1")
             self.db.set_setting(pending_key, json.dumps({**pending, "status": "completed", "run_id": run_id}))
