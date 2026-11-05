@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.prepare_lean_strategy_lab import _write_bars, _write_strategy
+from scripts.prepare_lean_strategy_lab import _lean_capital_requirements, _write_bars, _write_strategy
 from scripts.summarize_lean_strategy_lab import _json_safe_metrics, _strategy_metrics
 
 
@@ -41,6 +41,19 @@ class LeanStrategyLabTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("--prepared-dir", result.stdout)
+
+    def test_lean_cash_covers_one_unit_above_100k_with_margin_buffer(self):
+        raw = self.raw.copy()
+        raw.loc[self.index[1], "High"] = 150000.0
+        max_price, initial_cash = _lean_capital_requirements(raw)
+        self.assertEqual(max_price, 150000.0)
+        self.assertEqual(initial_cash, 225000.0)
+        self.assertGreaterEqual(initial_cash, max_price * 1.5)
+
+    def test_lean_cash_keeps_existing_floor_for_lower_priced_markets(self):
+        max_price, initial_cash = _lean_capital_requirements(self.raw)
+        self.assertEqual(max_price, 103.0)
+        self.assertEqual(initial_cash, 100000.0)
 
     def test_writes_one_chronological_real_ohlc_stream(self):
         count, daily = _write_bars(self.tf_dir, self.raw)
