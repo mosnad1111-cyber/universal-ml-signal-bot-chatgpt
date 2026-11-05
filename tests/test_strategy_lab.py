@@ -34,7 +34,7 @@ class StrategyLabTests(unittest.TestCase):
                 "r": 1.0,
             },
             {
-                "time": "2026-01-01T13:00:00+03:00",
+                "time": "2026-01-01T16:00:00+03:00",
                 "exit_time": "2026-01-01 11:00:00",
                 "r": 2.0,
             },
