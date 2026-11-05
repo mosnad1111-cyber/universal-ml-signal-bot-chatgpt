@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from lean_actions import LeanActionsClient
 from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, GRID_SCORES, GRID_AI_PROBS
 from backtest import GoldBacktest
-from strategy_lab import StrategyResearchLab, STRATEGY_NAMES
 
 class Telegram:
     def __init__(self, db=None):
@@ -218,30 +217,47 @@ class Telegram:
         threading.Thread(target=work,daemon=True).start()
 
     def _strategy_lab(self, cid, asset_key='GOLD'):
-        if self.backtest_running:
-            self.send('⏳ يوجد اختبار يعمل حاليًا. انتظر اكتماله قبل تشغيل مختبر الاستراتيجيات.', cid)
+        if not self.db:
+            self.send('❌ تخزين طلب مختبر LEAN غير متاح في هذه الخدمة.', cid)
             return
-        self.backtest_running = True
-        asset = ASSETS.get(asset_key, ASSETS['GOLD'])
-        self.send(
-            f'🧭 <b>بدأ مختبر الاستراتيجيات — {asset["label"]}</b>\n\n'
-            'سيُختبر النموذج الحالي وثلاث فرضيات دخول جديدة على 5m و15m و1h. '
-            'كل استراتيجية تتعلم تسميات خاصة بها.\n'
-            'لن تتغير إشارات البوت الحية أثناء الاختبار. قد يستغرق العمل عدة دقائق.',
-            cid,
-        )
-        def work():
-            try:
-                lab = StrategyResearchLab()
-                def progress(tf, strategy):
-                    self.send(f'🔬 <b>{asset["label"]} | {tf}</b>\nالاستراتيجية: {STRATEGY_NAMES.get(strategy, strategy)}', cid)
-                report = lab.run_asset(asset['symbol'], progress=progress)
-                self.send_long(lab.format_ar(report), cid)
-            except Exception as exc:
-                self.send(f'❌ تعذر إكمال مختبر الاستراتيجيات: {type(exc).__name__}: {exc}', cid)
-            finally:
-                self.backtest_running = False
-        threading.Thread(target=work, daemon=True).start()
+        if self.backtest_running or self.db.get_setting('lean_active_request'):
+            self.send('⏳ يوجد اختبار LEAN آخر قيد التشغيل. انتظر وصول التقرير قبل تشغيل المختبر.', cid)
+            return
+        if asset_key not in ASSETS:
+            self.send('❌ الأصل المحدد غير مدعوم.', cid)
+            return
+        timeframes = ['5m', '15m', '1h']
+        request_id = uuid.uuid4().hex
+        asset = ASSETS[asset_key]
+        record = {
+            'request_id': request_id,
+            'chat_id': str(cid),
+            'asset_key': asset_key,
+            'timeframes': timeframes,
+            'mode': 'strategy_lab',
+            'status': 'queued',
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self.lean_client.validate_request(asset_key, timeframes)
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
+            self.db.set_setting('lean_active_request', request_id)
+            self.backtest_running = True
+            self.send(
+                f'🚀 <b>تم إرسال مختبر الاستراتيجيات إلى LEAN — {asset["label"]}</b>\n\n'
+                'سيختبر أربع استراتيجيات مستقلة على 5m و15m و1h باستخدام بيانات السوق التاريخية الفعلية.\n'
+                'كل استراتيجية تحصل على قرارات Walk-Forward خاصة بها، ثم ينفّذ LEAN الصفقات ويحسب سجل النتائج.\n'
+                'سيصل تقرير المعايرة والاحتجاز وحساسية التكلفة هنا عند اكتماله. لا تتغير إشارات التداول الحية.',
+                cid,
+            )
+            self.lean_client.dispatch_strategy_lab(request_id, asset_key, timeframes)
+            record['status'] = 'dispatched'
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
+        except Exception as exc:
+            self.backtest_running = False
+            self.db.set_setting(f'lean_request:{request_id}', json.dumps({**record, 'status': 'dispatch_failed'}))
+            self.db.set_setting('lean_active_request', '')
+            self.send('❌ <b>تعذر تشغيل مختبر الاستراتيجيات على LEAN.</b>\n' + str(exc), cid)
 
     def poll(self):
         if not self.base: print('ERROR: TELEGRAM_BOT_TOKEN غير موجود'); return
