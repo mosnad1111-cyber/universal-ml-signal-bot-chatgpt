@@ -26,6 +26,31 @@ class StrategyLabTests(unittest.TestCase):
         self.assertEqual(calibration[0]["r"], -1.0)
         self.assertEqual(holdout[0]["r"], -1.0)
 
+    def test_split_normalizes_mixed_naive_and_aware_timestamps_to_utc(self):
+        trades = [
+            {
+                "time": "2026-01-01 09:00:00",
+                "exit_time": "2026-01-01T10:00:00+00:00",
+                "r": 1.0,
+            },
+            {
+                "time": "2026-01-01T16:00:00+03:00",
+                "exit_time": "2026-01-01 11:00:00",
+                "r": 2.0,
+            },
+            {
+                "time": "2026-01-01 11:00:00",
+                "exit_time": "2026-01-01T13:00:00+00:00",
+                "r": 3.0,
+            },
+        ]
+        from pandas import Timestamp
+        calibration, holdout = split_completed_trades(
+            trades, Timestamp("2026-01-01T12:00:00+00:00")
+        )
+        self.assertEqual([trade["r"] for trade in calibration], [1.0])
+        self.assertEqual([trade["r"] for trade in holdout], [2.0])
+
     def test_empty_sample_is_explicit(self):
         result = summarize_trades([])
         self.assertEqual(result["trades"], 0)
