@@ -54,12 +54,13 @@ class DB:
         c.row_factory = sqlite3.Row
         return c
 
+    def _adapt_sql(self, sql):
+        # All DB parameters in this module use qmark placeholders. Convert
+        # them for psycopg while keeping the SQLite queries unchanged.
+        return sql.replace("?", "%s") if self.backend == "postgres" else sql
+
     def _execute(self, conn, sql, params=()):
-        if self.backend == "postgres":
-            # All DB parameters in this module use qmark placeholders. Convert
-            # them for psycopg while keeping the SQLite queries unchanged.
-            sql = sql.replace("?", "%s")
-        return conn.execute(sql, params)
+        return conn.execute(self._adapt_sql(sql), params)
 
     def _init_sqlite(self):
         with self._conn() as c:
@@ -154,20 +155,18 @@ class DB:
             created_at,wave_key,candle_time,features_json
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         with self.lock, self._conn() as c:
+            if self.backend == "postgres":
+                row = self._execute(
+                    c,
+                    query + " ON CONFLICT(symbol,timeframe,wave_key) DO NOTHING RETURNING id",
+                    values,
+                ).fetchone()
+                return int(row["id"]) if row else None
             try:
-                if self.backend == "postgres":
-                    row = self._execute(
-                        c, query + " RETURNING id", values
-                    ).fetchone()
-                    return int(row["id"])
                 cur = self._execute(c, query, values)
                 return cur.lastrowid
-            except (sqlite3.IntegrityError,):
+            except sqlite3.IntegrityError:
                 return None
-            except Exception as exc:
-                if self.backend == "postgres" and exc.__class__.__name__ == "UniqueViolation":
-                    return None
-                raise
 
     def _legacy_cleanup(self):
         with self._conn() as c:
