@@ -1,14 +1,22 @@
 services:
   - type: web
-    name: gold-ai-telegram-bot
+    name: universal-ml-signal-bot-chatgpt
     runtime: python
+    region: oregon
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120 web:app
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.13
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TIMEFRAMES
-        value: 5m,1h
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ugn
+          property: connectionString
+
+databases:
+  - name: ugn
+    plan: free
+    databaseName: ugn
+    user: ugn_user
+    postgresMajorVersion: "18"
+    region: oregon
