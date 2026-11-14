@@ -408,7 +408,7 @@ class Engine:
                 for label, key in (('BUY','buy_auc'),('SELL','sell_auc')):
                     if value.get(key) is not None: lines.append(f"  AUC {label}: {float(value[key]):.3f}")
             lines.append('ℹ️ AUC وAccuracy يقيسان عينة تحقق النموذج ولا يمثلان مباشرةً نسبة نجاح الصفقات.')
-        return '\\n'.join(lines)
+        return '\n'.join(lines)
 
     def start(self):
         """Start the background market scanner and open-trade monitor."""
