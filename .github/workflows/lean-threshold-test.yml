@@ -1,0 +1,310 @@
+name: LEAN historical threshold test
+run-name: LEAN threshold test ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset:
+        description: Market asset
+        required: true
+        type: choice
+        options: [GOLD, BTC]
+      timeframes:
+        description: "all or a comma-separated list such as 5m,15m,1h"
+        required: true
+        type: string
+      request_id:
+        description: Telegram request correlation ID
+        required: true
+        type: string
+      callback_url:
+        description: Render callback URL supplied by the bot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lean-threshold-test:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Keep Render awake during strategy preparation and replay
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="${CALLBACK_URL%/lean-backtest/callback}"
+          case "$BASE_URL" in https://*) ;; *) echo "Render callback must be HTTPS"; exit 1 ;; esac
+          nohup bash -c '
+            while true; do
+              curl --fail --silent --show-error --max-time 30 "$1/health" >/dev/null || true
+              sleep 300
+            done
+          ' _ "$BASE_URL" >"$RUNNER_TEMP/lean-threshold-render-keepalive.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/lean-threshold-render-keepalive.pid"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bot model and market-data dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Prepare real historical score/AI threshold decisions
+        env:
+          ASSET: ${{ inputs.asset }}
+          TIMEFRAMES: ${{ inputs.timeframes }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          OUTPUT_DIR: ${{ runner.temp }}/lean-threshold/input
+          PYTHONPATH: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$TIMEFRAMES" = "all" ]; then
+            TF_LIST="5m,15m,1h"
+          else
+            TF_LIST="$TIMEFRAMES"
+          fi
+          python scripts/prepare_lean_threshold_test.py \
+            --asset "$ASSET" --timeframes "$TF_LIST" \
+            --request-id "$REQUEST_ID" --output-dir "$OUTPUT_DIR"
+
+      - name: Verify real OHLC and all threshold candidates
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/lean-threshold/input
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          python - <<'PY'
+          import csv, json, os, pathlib
+          from datetime import datetime, timezone
+          root = pathlib.Path(os.environ["OUTPUT_DIR"])
+          prepared = json.loads((root / "prepared_summary.json").read_text(encoding="utf-8"))
+          if prepared.get("request_id") != os.environ["REQUEST_ID"]:
+              raise SystemExit("Threshold-test request ID mismatch.")
+          if prepared.get("asset_key") != os.environ["ASSET"]:
+              raise SystemExit("Threshold-test asset mismatch.")
+          if prepared.get("report_type") != "LEAN real historical threshold test":
+              raise SystemExit("Unexpected threshold-test report type.")
+          if prepared.get("market_data_type") != "real_historical_ohlc" or prepared.get("synthetic_fixture") is not False:
+              raise SystemExit("Threshold tests require real OHLC, not synthetic fixtures.")
+          for section in prepared.get("timeframes", []):
+              meta = section["metadata"]
+              tf = meta["timeframe"]
+              end = datetime.fromisoformat(str(meta["end"]).replace("Z", "+00:00"))
+              if end.tzinfo is None:
+                  end = end.replace(tzinfo=timezone.utc)
+              if end.date() >= datetime.now(timezone.utc).date():
+                  raise SystemExit(f"{tf}: input includes the current UTC-day bars.")
+              if meta.get("market_data_type") != "real_historical_ohlc":
+                  raise SystemExit(f"{tf}: market data is not real historical OHLC.")
+              if not meta.get("market_data_source") or "synthetic" in meta["market_data_source"].lower():
+                  raise SystemExit(f"{tf}: real market-data provider is not identified.")
+              if int(meta.get("raw_bars", 0)) < 1200 or int(meta.get("usable_bars", 0)) < 1200:
+                  raise SystemExit(f"{tf}: insufficient real history.")
+              bars_file = root / tf / "bars.csv"
+              if not bars_file.is_file():
+                  raise SystemExit(f"{tf}: common OHLC stream is missing.")
+              with bars_file.open(newline="", encoding="utf-8") as handle:
+                  bars = list(csv.DictReader(handle))
+              if len(bars) != int(meta["bars_count"]):
+                  raise SystemExit(f"{tf}: OHLC row count mismatch.")
+              stamps = [row["time"] for row in bars]
+              if stamps != sorted(stamps) or len(stamps) != len(set(stamps)):
+                  raise SystemExit(f"{tf}: OHLC timestamps are not unique and chronological.")
+              bar_set = set(stamps)
+              order = section.get("threshold_order", [])
+              candidates = section.get("thresholds", {})
+              if not order or len(order) != len(set(order)) or set(order) != set(candidates):
+                  raise SystemExit(f"{tf}: threshold candidate list is incomplete.")
+              if len(order) != len(section.get("scores", [])) * len(section.get("ai_probabilities", [])):
+                  raise SystemExit(f"{tf}: grid size does not match its score/AI axes.")
+              ready = 0
+              baseline = 0
+              for candidate in order:
+                  item = candidates[candidate]
+                  if item.get("status") == "not_testable":
+                      if not item.get("error"):
+                          raise SystemExit(f"{tf}/{candidate}: missing not-testable reason.")
+                      continue
+                  if item.get("status") != "ready":
+                      raise SystemExit(f"{tf}/{candidate}: invalid preparation status.")
+                  candidate_dir = root / tf / "thresholds" / candidate
+                  metadata = json.loads((candidate_dir / "metadata.json").read_text(encoding="utf-8"))
+                  signals = json.loads((candidate_dir / "signals.json").read_text(encoding="utf-8"))
+                  if metadata.get("strategy") != candidate or metadata.get("decision_only") is not True:
+                      raise SystemExit(f"{tf}/{candidate}: strategy/decision-only metadata mismatch.")
+                  if metadata.get("market_data_source") != meta["market_data_source"]:
+                      raise SystemExit(f"{tf}/{candidate}: market data provider mismatch.")
+                  if len(signals) != int(metadata.get("signals_count", -1)):
+                      raise SystemExit(f"{tf}/{candidate}: signal count mismatch.")
+                  signal_times = [
+                      datetime.fromisoformat(str(event["signal_time"]).replace("Z", "+00:00"))
+                      .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+                      for event in signals
+                  ]
+                  if any(stamp not in bar_set for stamp in signal_times):
+                      raise SystemExit(f"{tf}/{candidate}: decision is not aligned to original OHLC.")
+                  if signal_times != sorted(signal_times) or len(signal_times) != len(set(signal_times)):
+                      raise SystemExit(f"{tf}/{candidate}: decisions are not uniquely ordered.")
+                  if not isinstance(metadata.get("score_threshold"), (int, float)) or not isinstance(metadata.get("ai_threshold"), (int, float)):
+                      raise SystemExit(f"{tf}/{candidate}: threshold metadata is missing.")
+                  ready += 1
+                  baseline += int(bool(metadata.get("is_live_baseline")))
+              if ready == 0 or baseline != 1:
+                  raise SystemExit(f"{tf}: expected ready candidates and exactly one live-config baseline; got {ready}/{baseline}.")
+              print(f"{tf}: verified {len(bars)} real OHLC bars, {ready} threshold candidates, one live baseline.")
+          print("REAL_HISTORICAL_THRESHOLD_TEST_INPUTS_VERIFIED")
+          PY
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
+          sudo docker system prune --all --force
+
+      - name: Prepare standalone LEAN runtime
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-threshold
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEAN_DIR/Algorithm.Python" "$LEAN_DIR/config"
+          cp lean_runtime/LeanBacktestAlgorithm.py "$LEAN_DIR/Algorithm.Python/"
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/QuantConnect/Lean/master/Launcher/config.json \
+            --output "$LEAN_DIR/config/lean.json"
+          python - "$LEAN_DIR/config/lean.json" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          config = path.read_text()
+          replacements = {
+              '"algorithm-type-name": "BasicTemplateFrameworkAlgorithm"':
+                  '"algorithm-type-name": "LeanBacktestAlgorithm"',
+              '"algorithm-language": "CSharp"': '"algorithm-language": "Python"',
+              '"algorithm-location": "QuantConnect.Algorithm.CSharp.dll"':
+                  '"algorithm-location": "../../../Algorithm.Python/LeanBacktestAlgorithm.py"',
+          }
+          for old, new in replacements.items():
+              if old not in config:
+                  raise SystemExit(f"LEAN config template changed; missing {old}")
+              config = config.replace(old, new, 1)
+          path.write_text(config)
+          PY
+
+      - name: Pull official LEAN engine
+        run: docker pull --platform linux/arm64 quantconnect/lean:latest
+
+      - name: Execute every eligible threshold candidate inside LEAN
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-threshold
+          PREPARED_DIR: ${{ runner.temp }}/lean-threshold/input
+          TIMEFRAMES: ${{ inputs.timeframes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEAN_DIR/results"
+          for tf in 5m 15m 1h; do
+            if [ "$TIMEFRAMES" != "all" ] && [[ ",$TIMEFRAMES," != *",$tf,"* ]]; then continue; fi
+            for STRATEGY_INPUT in "$PREPARED_DIR/$tf/thresholds"/*; do
+              [ -d "$STRATEGY_INPUT" ] || continue
+              strategy="$(basename "$STRATEGY_INPUT")"
+              if [ ! -f "$STRATEGY_INPUT/metadata.json" ]; then
+                echo "Skipping $tf/$strategy: threshold decision stream was not testable."
+                continue
+              fi
+              RESULT_DIR="$LEAN_DIR/results/$tf/$strategy"
+              mkdir -p "$RESULT_DIR"
+              rm -rf "$LEAN_DIR/Algorithm.Python/input"
+              mkdir -p "$LEAN_DIR/Algorithm.Python/input"
+              cp "$PREPARED_DIR/$tf/bars.csv" "$LEAN_DIR/Algorithm.Python/input/bars.csv"
+              cp "$STRATEGY_INPUT/metadata.json" "$LEAN_DIR/Algorithm.Python/input/metadata.json"
+              cp "$STRATEGY_INPUT/signals.json" "$LEAN_DIR/Algorithm.Python/input/signals.json"
+              echo "Running LEAN: $tf / $strategy"
+              docker run --rm --platform linux/arm64 \
+                --volume "$LEAN_DIR/Algorithm.Python:/Lean/Algorithm.Python:ro" \
+                --volume "$LEAN_DIR/config/lean.json:/Lean/Launcher/config.json:ro" \
+                --volume "$RESULT_DIR:/Results" \
+                quantconnect/lean:latest \
+                --results-destination-folder /Results \
+                --config /Lean/Launcher/config.json 2>&1 | tee "$RESULT_DIR/lean-engine.log"
+              test -s "$RESULT_DIR/lean_report.json"
+            done
+          done
+
+      - name: Build verified LEAN threshold comparison report
+        env:
+          LEAN_DIR: ${{ runner.temp }}/lean-threshold
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
+        run: |
+          python scripts/summarize_lean_threshold_test.py \
+            --prepared-dir "$LEAN_DIR/input" \
+            --results-dir "$LEAN_DIR/results" \
+            --output-dir "$LEAN_DIR/report" \
+            --request-id "$REQUEST_ID" --asset "$ASSET"
+
+      - name: Upload LEAN threshold-test diagnostics on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-threshold-test-diagnostics-${{ inputs.request_id }}
+          path: |
+            ${{ runner.temp }}/lean-threshold/input/
+            ${{ runner.temp }}/lean-threshold/results/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Upload verified LEAN threshold-test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-threshold-test-${{ inputs.request_id }}
+          path: ${{ runner.temp }}/lean-threshold/report/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Notify Render so the LEAN threshold report is delivered to Telegram
+        if: always()
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os, time, urllib.parse
+          import requests
+          base = os.environ["CALLBACK_URL"].rstrip("/")
+          parsed = urllib.parse.urlparse(base)
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("Callback URL must use HTTPS")
+          payload = {"request_id": os.environ["REQUEST_ID"], "run_id": int(os.environ["RUN_ID"])}
+          last = None
+          for attempt in range(8):
+              try:
+                  response = requests.post(
+                      base, json=payload,
+                      headers={"Content-Type": "application/json"},
+                      timeout=(10, 30),
+                  )
+                  if response.ok:
+                      print("Render accepted the LEAN threshold-test completion callback")
+                      break
+                  last = f"HTTP {response.status_code}: {response.text[:300]}"
+              except Exception as exc:
+                  last = f"{type(exc).__name__}: {exc}"
+              time.sleep(min(5 * (attempt + 1), 30))
+          else:
+              raise SystemExit(f"Render callback failed after retries: {last}")
+          PY
+          if [ -f "$RUNNER_TEMP/lean-threshold-render-keepalive.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/lean-threshold-render-keepalive.pid")" || true
+          fi
