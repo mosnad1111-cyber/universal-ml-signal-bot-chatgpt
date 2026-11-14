@@ -441,14 +441,41 @@ class LeanActionsClient:
             pf_text = "∞"
         else:
             pf_text = f"{float(pf or 0.0):.2f}"
+        directional_lines = []
+        directional = candidate.get("directional") or {}
+        for direction, arabic in (("BUY", "BUY شراء"), ("SELL", "SELL بيع")):
+            side = directional.get(direction) or {}
+            cal = side.get("calibration_net", {})
+            test = side.get("holdout_net", {})
+            stress_side = side.get("holdout_cost_010R", {})
+            directional_lines.append(
+                f"    {arabic}: Calibration {int(cal.get('trades', 0))} صفقة / "
+                f"Net {float(cal.get('net_after_cost_r', 0.0)):+.2f}R / "
+                f"WR {float(cal.get('win_rate', 0.0)):.1f}% / "
+                f"PF {cls._format_threshold_pf(cal.get('profit_factor', 0.0))} | "
+                f"Holdout {int(test.get('trades', 0))} صفقة / "
+                f"Net {float(test.get('net_after_cost_r', 0.0)):+.2f}R / "
+                f"ضغط 0.10R {float(stress_side.get('net_after_cost_r', 0.0)):+.2f}R"
+            )
         return (
             f"  Score ≥ {score:g} | AI ≥ {ai*100:.0f}% | "
             f"Calibration: {int(calibration.get('trades', 0))} صفقة، Net {float(calibration.get('net_after_cost_r', 0.0)):+.2f}R، "
             f"WR {float(calibration.get('win_rate', 0.0)):.1f}%، PF {pf_text} | "
             f"Holdout: {int(holdout.get('trades', 0))} صفقة، Net {float(holdout.get('net_after_cost_r', 0.0)):+.2f}R، "
             f"ضغط 0.10R: {float(stress.get('net_after_cost_r', 0.0)):+.2f}R | "
-            f"LEAN منفذ {int(report.get('trades', 0))} / غير مفعّل {int(candidate.get('unfilled_setups', 0))}"
+            f"LEAN منفذ {int(report.get('trades', 0))} / غير مفعّل {int(candidate.get('unfilled_setups', 0))}\n"
+            + "\n".join(directional_lines)
         )
+
+    @staticmethod
+    def _format_threshold_pf(value: Any) -> str:
+        if value in ("Infinity", "inf", "∞") or (
+            isinstance(value, (int, float)) and math.isinf(float(value))
+        ):
+            return "∞"
+        if value is None:
+            return "—"
+        return f"{float(value or 0.0):.2f}"
 
     def handle_callback(self, run_id: int, request_id: str, telegram) -> tuple[dict[str, Any], int]:
         if not REQUEST_ID_RE.fullmatch(request_id or ""):

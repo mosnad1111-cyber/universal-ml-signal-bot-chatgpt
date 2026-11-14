@@ -22,14 +22,19 @@ def _trade_sets(report: dict) -> tuple[list[dict], list[dict]]:
     if not isinstance(ledger, list):
         raise SystemExit("LEAN threshold trade ledger must be a list.")
     for item in ledger:
+        direction = str(item.get("direction", "")).upper()
+        if direction not in ("BUY", "SELL"):
+            raise SystemExit("LEAN threshold trade ledger has a missing or invalid direction.")
         gross.append({
             "time": item["signal_time"],
             "exit_time": item["exit_time"],
+            "direction": direction,
             "r": float(item["gross_r"]),
         })
         net.append({
             "time": item["signal_time"],
             "exit_time": item["exit_time"],
+            "direction": direction,
             "r": float(item["net_r"]),
         })
     return gross, net
@@ -46,7 +51,27 @@ def _candidate_metrics(metadata: dict, report: dict) -> dict:
 
     calibration_gross, holdout_gross = split(gross)
     calibration_net, holdout_net = split(net)
+
+    # Directional slices use the exact same LEAN trade ledger and the same
+    # timestamp split as the combined result; no signal-side Python scoring.
+    directional = {}
+    for direction in ("BUY", "SELL"):
+        side_gross = [item for item in gross if item["direction"] == direction]
+        side_net = [item for item in net if item["direction"] == direction]
+        side_cal_gross, side_hold_gross = split(side_gross)
+        side_cal_net, side_hold_net = split(side_net)
+        directional[direction] = {
+            "all_gross": _json_safe_metrics(summarize_trades(side_gross, 0.0)),
+            "calibration_gross": _json_safe_metrics(summarize_trades(side_cal_gross, 0.0)),
+            "holdout_gross": _json_safe_metrics(summarize_trades(side_hold_gross, 0.0)),
+            "all_net": _json_safe_metrics(summarize_trades(side_net, 0.0)),
+            "calibration_net": _json_safe_metrics(summarize_trades(side_cal_net, 0.0)),
+            "holdout_net": _json_safe_metrics(summarize_trades(side_hold_net, 0.0)),
+            "holdout_cost_010R": _json_safe_metrics(summarize_trades(side_hold_gross, 0.10)),
+        }
+
     return {
+        "directional": directional,
         "all_gross": _json_safe_metrics(summarize_trades(gross, 0.0)),
         "calibration_gross": _json_safe_metrics(summarize_trades(calibration_gross, 0.0)),
         "holdout_gross": _json_safe_metrics(summarize_trades(holdout_gross, 0.0)),
