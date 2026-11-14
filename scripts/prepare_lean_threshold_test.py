@@ -31,6 +31,13 @@ def threshold_id(score: float, ai: float) -> str:
     return f"score_{int(round(float(score))):03d}_ai_{int(round(float(ai) * 100)):03d}"
 
 
+def threshold_axes(timeframe: str) -> tuple[list[float], list[float], float, float]:
+    live_score, live_ai = thresholds_for(timeframe)
+    scores = sorted(set(float(value) for value in GRID_SCORES) | {float(live_score)})
+    ai_values = sorted(set(float(value) for value in GRID_AI_PROBS) | {float(live_ai)})
+    return scores, ai_values, float(live_score), float(live_ai)
+
+
 def _write_candidate(tf_dir: Path, candidate: str, result: dict, common: dict,
                      score: float, ai: float, is_live_baseline: bool) -> dict:
     if result.get("decision_only") is not True:
@@ -160,11 +167,9 @@ def main() -> None:
             ),
         }
 
-        live_score, live_ai = thresholds_for(tf)
-        # Retain the legacy research grid, but always add the actual operational
-        # pair for this timeframe so the report has a true live-config baseline.
-        scores = sorted(set(float(value) for value in GRID_SCORES) | {float(live_score)})
-        ai_values = sorted(set(float(value) for value in GRID_AI_PROBS) | {float(live_ai)})
+        # Retain the legacy score/probability grid and add the operational
+        # pair for this timeframe so the live configuration is always a baseline.
+        scores, ai_values, live_score, live_ai = threshold_axes(tf)
         predictions = backtest._walk_forward_predictions(
             tf, features, BACKTEST_RETRAIN_EVERY, asset["symbol"], "baseline"
         )
