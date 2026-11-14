@@ -524,7 +524,7 @@ class LeanActionsClient:
                 return {"ok": False, "error": "workflow_not_ready"}, 409
 
             if failure_detail:
-                task_name = "مختبر الاستراتيجيات على LEAN" if strategy_lab else "باكتيست LEAN الحقيقي"
+                task_name = ("اختبار العتبات على LEAN" if threshold_test else ("مختبر الاستراتيجيات على LEAN" if strategy_lab else "باكتيست LEAN الحقيقي"))
                 message = (
                     f"❌ <b>فشل {task_name}.</b>\n"
                     f"المرحلة: {html.escape(failure_detail)}\n"
