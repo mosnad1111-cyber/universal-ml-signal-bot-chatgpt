@@ -343,7 +343,7 @@ class Engine:
                 f"Net {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | PF {pf_text}")
 
     def stats_text(self):
-        recent = self.db.recent(10000)
+        recent = [dict(row) for row in self.db.recent(10000)]
         lines = [
             '📊 <b>تقرير الأداء التفصيلي</b>',
             'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة فقط.',
@@ -409,6 +409,7 @@ class Engine:
                     if value.get(key) is not None: lines.append(f"  AUC {label}: {float(value[key]):.3f}")
             lines.append('ℹ️ AUC وAccuracy يقيسان عينة تحقق النموذج ولا يمثلان مباشرةً نسبة نجاح الصفقات.')
         return '\\n'.join(lines)
+
     def start(self):
         """Start the background market scanner and open-trade monitor."""
         if getattr(self, "_started", False):
