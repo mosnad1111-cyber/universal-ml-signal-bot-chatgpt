@@ -463,8 +463,8 @@ class LeanActionsClient:
             f"WR {float(calibration.get('win_rate', 0.0)):.1f}%، PF {pf_text} | "
             f"Holdout: {int(holdout.get('trades', 0))} صفقة، Net {float(holdout.get('net_after_cost_r', 0.0)):+.2f}R، "
             f"ضغط 0.10R: {float(stress.get('net_after_cost_r', 0.0)):+.2f}R | "
-            f"LEAN منفذ {int(report.get('trades', 0))} / غير مفعّل {int(candidate.get('unfilled_setups', 0))}\\n"
-            + "\\n".join(directional_lines)
+            f"LEAN منفذ {int(report.get('trades', 0))} / غير مفعّل {int(candidate.get('unfilled_setups', 0))}\n"
+            + "\n".join(directional_lines)
         )
 
     @staticmethod
