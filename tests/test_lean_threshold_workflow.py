@@ -15,7 +15,7 @@ class LeanThresholdWorkflowTests(unittest.TestCase):
         self.assertIn("synthetic_fixture", workflow)
         self.assertIn("/health", workflow)
         self.assertIn("Build verified LEAN threshold comparison report", workflow)
-        self.assertNotIn("lean_smoke", workflow)
+        self.assertIn("lean_runtime/LeanBacktestAlgorithm.py", workflow)
 
 
 if __name__ == "__main__":
