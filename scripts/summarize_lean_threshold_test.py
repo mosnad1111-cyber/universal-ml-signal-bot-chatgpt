@@ -76,6 +76,26 @@ def _rank_key(candidate: dict) -> tuple[float, float, float]:
     )
 
 
+def select_calibration_candidates(executed: list[dict], min_trades: int = 30) -> tuple[dict | None, list[dict]]:
+    """Select only from calibration metrics; holdout fields are deliberately ignored."""
+    eligible = []
+    for item in executed:
+        calibration = item.get("calibration_net", {})
+        pf = calibration.get("profit_factor", 0.0)
+        pf_value = (
+            math.inf if pf == "Infinity"
+            else (float(pf) if isinstance(pf, (int, float)) else 0.0)
+        )
+        if (
+            int(calibration.get("trades", 0)) >= int(min_trades)
+            and float(calibration.get("net_after_cost_r", 0.0)) > 0
+            and pf_value > 1.0
+        ):
+            eligible.append(item)
+    eligible.sort(key=_rank_key, reverse=True)
+    return (eligible[0] if eligible else None), eligible[:5]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prepared-dir", required=True)
@@ -153,20 +173,7 @@ def main() -> None:
         baseline = next((item for item in executed if item.get("is_live_baseline")), None)
         # Do not use the holdout to choose parameters. Require an adequate
         # calibration sample, positive net expectancy, and PF > 1.
-        eligible = []
-        for item in executed:
-            cal = item.get("calibration_net", {})
-            pf = cal.get("profit_factor", 0.0)
-            pf_value = math.inf if pf == "Infinity" else (float(pf) if isinstance(pf, (int, float)) else 0.0)
-            if (
-                int(cal.get("trades", 0)) >= 30
-                and float(cal.get("net_after_cost_r", 0.0)) > 0
-                and pf_value > 1.0
-            ):
-                eligible.append(item)
-        eligible.sort(key=_rank_key, reverse=True)
-        selected = eligible[0] if eligible else None
-        top_candidates = eligible[:5]
+        selected, top_candidates = select_calibration_candidates(executed)
 
         timeframe_sections.append({
             "metadata": common,
