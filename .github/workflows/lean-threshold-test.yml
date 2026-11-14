@@ -179,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$LEAN_DIR/Algorithm.Python" "$LEAN_DIR/config"
-          cp lean_smoke/LeanBacktestAlgorithm.py "$LEAN_DIR/Algorithm.Python/"
+          cp lean_runtime/LeanBacktestAlgorithm.py "$LEAN_DIR/Algorithm.Python/"
           curl --fail --silent --show-error --location \
             https://raw.githubusercontent.com/QuantConnect/Lean/master/Launcher/config.json \
             --output "$LEAN_DIR/config/lean.json"
