@@ -17,6 +17,7 @@ import requests
 DEFAULT_REPOSITORY = "mosnad1111-cyber/universal-ml-signal-bot-chatgpt"
 WORKFLOW_FILE = "lean-real-backtest.yml"
 LAB_WORKFLOW_FILE = "lean-strategy-lab.yml"
+THRESHOLD_WORKFLOW_FILE = "lean-threshold-test.yml"
 WORKFLOW_NAME = "LEAN real market backtest"
 LAB_STRATEGIES = ("baseline", "trend_pullback", "breakout_retest", "momentum_continuation")
 LAB_STRATEGY_NAMES = {
@@ -128,6 +129,35 @@ class LeanActionsClient:
                 f"GitHub رفض تشغيل مختبر LEAN ({response.status_code}). {detail}"
             )
 
+    def dispatch_threshold_test(self, request_id: str, asset_key: str, timeframes: list[str]) -> None:
+        """Start the real-history Score/AI grid; every candidate is executed by LEAN."""
+        if not REQUEST_ID_RE.fullmatch(request_id or ""):
+            raise LeanActionsError("معرّف اختبار العتبات غير صالح.")
+        self.validate_request(asset_key, timeframes)
+        if not self.configured:
+            raise LeanActionsError(
+                "يلزم إعداد GITHUB_ACTIONS_TOKEN ووجود رابط Render HTTPS قبل تشغيل اختبار العتبات على LEAN."
+            )
+        response = self.session.post(
+            f"{self.api_base}/actions/workflows/{THRESHOLD_WORKFLOW_FILE}/dispatches",
+            headers=self._headers(),
+            json={
+                "ref": "main",
+                "inputs": {
+                    "asset": asset_key,
+                    "timeframes": ",".join(timeframes),
+                    "request_id": request_id,
+                    "callback_url": self.callback_base_url + "/lean-backtest/callback",
+                },
+            },
+            timeout=(10, 30),
+        )
+        if response.status_code != 204:
+            detail = (getattr(response, "text", "") or "")[:500]
+            raise LeanActionsError(
+                f"GitHub رفض تشغيل اختبار العتبات على LEAN ({response.status_code}). {detail}"
+            )
+
     def _get_json(self, url: str) -> dict[str, Any]:
         response = self.session.get(url, headers=self._headers(), timeout=(10, 45))
         response.raise_for_status()
@@ -136,11 +166,13 @@ class LeanActionsClient:
             raise LeanActionsError("استجابة GitHub غير متوقعة.")
         return payload
 
-    def _read_artifact(self, run_id: int, request_id: str, strategy_lab: bool = False) -> dict[str, Any]:
+    def _read_artifact(self, run_id: int, request_id: str, strategy_lab: bool = False,
+                       threshold_test: bool = False) -> dict[str, Any]:
         artifacts_payload = self._get_json(f"{self.api_base}/actions/runs/{run_id}/artifacts")
         expected_name = (
-            f"lean-strategy-lab-{request_id}" if strategy_lab
-            else f"lean-real-backtest-{request_id}"
+            f"lean-threshold-test-{request_id}" if threshold_test
+            else (f"lean-strategy-lab-{request_id}" if strategy_lab
+                  else f"lean-real-backtest-{request_id}")
         )
         artifact = next(
             (
@@ -337,6 +369,87 @@ class LeanActionsClient:
         ])
         return "\n".join(lines)
 
+    @classmethod
+    def format_threshold_test_report(cls, summary: dict[str, Any]) -> str:
+        asset_labels = {"GOLD": "الذهب XAU/USD", "BTC": "البيتكوين BTC/USDT"}
+        lines = [
+            "🔬 <b>اختبار عتبات AI / Score — تنفيذ LEAN تاريخي حقيقي</b>",
+            f"الأصل: <b>{html.escape(asset_labels.get(summary.get('asset_key', ''), str(summary.get('asset_key', ''))))}</b>",
+            "كل التركيبات تستخدم بيانات OHLC نفسها وتوقعات Walk-Forward نفسها داخل كل فريم؛ LEAN وحده يحسم الدخول والخروج والرسوم.",
+            "اختيار المرشح يتم من النصف الأول (المعايرة) فقط؛ النصف الثاني (Holdout) للقياس المستقل ولا يدخل في ترتيب المرشحين.",
+            "",
+        ]
+        for section in summary.get("timeframes", []):
+            common = section.get("metadata", {})
+            timeframe = html.escape(str(common.get("timeframe", "?")))
+            active = section.get("active_thresholds", {})
+            source = html.escape(str(common.get("market_data_source", "غير معروف")))
+            lines.extend([
+                f"⏱️ <b>{timeframe}</b>",
+                f"المصدر: {source}",
+                f"الشموع: {int(common.get('raw_bars', 0)):,} خام / {int(common.get('completed_bars', 0)):,} مكتملة / {int(common.get('usable_bars', 0)):,} مستخدمة",
+                f"الفترة UTC: {html.escape(str(common.get('snapshot_start', '—')))} → {html.escape(str(common.get('snapshot_end', '—')))}",
+                f"العتبات الحية الحالية: Score ≥ {float(active.get('score', 0.0)):g} | AI ≥ {float(active.get('ai', 0.0))*100:.0f}%",
+                f"التركيبات المنفذة: {int(section.get('executed_candidates', 0))} | غير القابلة للاختبار: {int(section.get('not_testable_candidates', 0))}",
+            ])
+            if common.get("history_partial"):
+                lines.append("⚠️ التاريخ المتاح أقل من العدد المطلوب.")
+            by_id = {}
+            baseline = section.get("live_baseline")
+            selected = section.get("calibration_selected")
+            for item in (baseline, selected, *(section.get("top_calibration_candidates") or [])):
+                if item and item.get("status") == "executed":
+                    by_id[item.get("threshold_id")] = item
+            ordered = list(by_id.values())
+            if baseline:
+                lines.append("🟦 <b>خط الأساس — العتبات الحية</b>")
+                lines.append(cls._format_threshold_candidate(baseline))
+            if selected:
+                lines.append("🏅 <b>أفضل مرشح في المعايرة فقط</b>")
+                lines.append(cls._format_threshold_candidate(selected))
+            else:
+                lines.append("⚪ لم يستوفِ أي مرشح شروط الاختيار في المعايرة (30 صفقة مكتملة على الأقل، Net موجب، وPF أكبر من 1).")
+            if ordered:
+                lines.append("📋 <b>أفضل نتائج المعايرة المعروضة</b>")
+                for item in ordered:
+                    lines.append(cls._format_threshold_candidate(item))
+            failed = [
+                item for item in section.get("threshold_results", [])
+                if item.get("status") == "not_testable"
+            ]
+            if failed:
+                first_reason = str(failed[0].get("error", "غير محدد"))[:180]
+                lines.append(f"أسباب عدم الاختبار: {len(failed)} تركيبة؛ مثال: {html.escape(first_reason)}")
+            lines.append("")
+        lines.extend([
+            "مقياس Net في نتائج LEAN يخص افتراض تكلفة إجمالية 0.05R لكل صفقة مكتملة. حساسية 0.10R لكل صفقة معروضة للـHoldout وليست تسعيرًا فعليًا لوسيط.",
+            "لا يتم تغيير العتبات الحية تلقائيًا. لا تعتمد المرشح قبل مراجعة Holdout ثم اختباره على فترة مستقبلية جديدة مستقلة.",
+            "هذا اختبار تاريخي ببيانات فعلية وليس ضمانًا للربح أو تنفيذًا لدى وسيطك.",
+        ])
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_threshold_candidate(cls, candidate: dict[str, Any]) -> str:
+        score = float(candidate.get("score_threshold", 0.0))
+        ai = float(candidate.get("ai_threshold", 0.0))
+        calibration = candidate.get("calibration_net", {})
+        holdout = candidate.get("holdout_net", {})
+        stress = candidate.get("holdout_cost_010R", {})
+        report = candidate.get("lean_report", {})
+        pf = calibration.get("profit_factor", 0.0)
+        if pf in ("Infinity", "inf", "∞") or (isinstance(pf, (int, float)) and math.isinf(float(pf))):
+            pf_text = "∞"
+        else:
+            pf_text = f"{float(pf or 0.0):.2f}"
+        return (
+            f"  Score ≥ {score:g} | AI ≥ {ai*100:.0f}% | "
+            f"Calibration: {int(calibration.get('trades', 0))} صفقة، Net {float(calibration.get('net_after_cost_r', 0.0)):+.2f}R، "
+            f"WR {float(calibration.get('win_rate', 0.0)):.1f}%، PF {pf_text} | "
+            f"Holdout: {int(holdout.get('trades', 0))} صفقة، Net {float(holdout.get('net_after_cost_r', 0.0)):+.2f}R، "
+            f"ضغط 0.10R: {float(stress.get('net_after_cost_r', 0.0)):+.2f}R | "
+            f"LEAN منفذ {int(report.get('trades', 0))} / غير مفعّل {int(candidate.get('unfilled_setups', 0))}"
+        )
+
     def handle_callback(self, run_id: int, request_id: str, telegram) -> tuple[dict[str, Any], int]:
         if not REQUEST_ID_RE.fullmatch(request_id or ""):
             return {"ok": False, "error": "invalid_request_id"}, 400
@@ -350,6 +463,7 @@ class LeanActionsClient:
             return {"ok": False, "error": "invalid_pending_request"}, 409
 
         strategy_lab = pending.get("mode") == "strategy_lab"
+        threshold_test = pending.get("mode") == "threshold_test"
         try:
             run = self._get_json(f"{self.api_base}/actions/runs/{int(run_id)}")
             # GitHub re-runs keep the same run_id and increment run_attempt.
@@ -366,14 +480,18 @@ class LeanActionsClient:
             ):
                 return {"ok": True, "duplicate": True}, 200
 
-            expected_workflow = LAB_WORKFLOW_FILE if strategy_lab else WORKFLOW_FILE
+            expected_workflow = (
+                THRESHOLD_WORKFLOW_FILE if threshold_test
+                else (LAB_WORKFLOW_FILE if strategy_lab else WORKFLOW_FILE)
+            )
             if run.get("path") != f".github/workflows/{expected_workflow}":
                 raise LeanActionsError("Workflow path does not match the requested LEAN task.")
             if run.get("event") != "workflow_dispatch":
                 raise LeanActionsError("Only manually dispatched LEAN runs are accepted.")
             expected_title = (
-                f"LEAN strategy lab {request_id}" if strategy_lab
-                else f"LEAN historical backtest {request_id}"
+                f"LEAN threshold test {request_id}" if threshold_test
+                else (f"LEAN strategy lab {request_id}" if strategy_lab
+                      else f"LEAN historical backtest {request_id}")
             )
             display_title = run.get("display_title")
             if display_title != expected_title:
@@ -423,7 +541,10 @@ class LeanActionsClient:
                 return {"ok": True, "workflow_conclusion": workflow_conclusion or "failure"}, 200
 
             # Artifact upload is the last successful step before this callback.
-            summary = self._read_artifact(int(run_id), request_id, strategy_lab=strategy_lab)
+            summary = self._read_artifact(
+                int(run_id), request_id,
+                strategy_lab=strategy_lab, threshold_test=threshold_test,
+            )
             if summary.get("synthetic_fixture") is not False:
                 raise LeanActionsError("رفض التقرير: وسم synthetic_fixture غير مطابق.")
             if summary.get("market_data_type") != "real_historical_ohlc":
@@ -473,6 +594,61 @@ class LeanActionsClient:
                     if executed == 0:
                         raise LeanActionsError("لا توجد استراتيجية قابلة للتنفيذ والتحقق في هذا الفريم.")
                 report_text = self.format_strategy_lab_report(summary)
+            elif threshold_test:
+                if summary.get("report_type") != "LEAN real historical threshold test":
+                    raise LeanActionsError("نوع التقرير لا يطابق اختبار العتبات على LEAN.")
+                for section in timeframes:
+                    common = section.get("metadata", {})
+                    if not common.get("market_data_source") or int(common.get("raw_bars", 0)) < 1200:
+                        raise LeanActionsError("التاريخ السوقي لاختبار العتبات ناقص أو غير موثق.")
+                    results = section.get("threshold_results") or []
+                    if not results:
+                        raise LeanActionsError("لا توجد نتائج لتركيبات العتبات في التقرير.")
+                    active = section.get("active_thresholds") or {}
+                    if not isinstance(active.get("score"), (int, float)) or not isinstance(active.get("ai"), (int, float)):
+                        raise LeanActionsError("العتبات التشغيلية الحالية غير موثقة في التقرير.")
+                    baseline_id = section.get("live_baseline_threshold_id")
+                    seen = set()
+                    for result in results:
+                        threshold_id = result.get("threshold_id")
+                        if not threshold_id or threshold_id in seen:
+                            raise LeanActionsError("معرّفات تركيبات العتبات غير صالحة أو مكررة.")
+                        seen.add(threshold_id)
+                        if result.get("status") == "not_testable":
+                            if not result.get("error"):
+                                raise LeanActionsError(f"سبب عدم اختبار {threshold_id} غير موثق.")
+                            continue
+                        if result.get("status") != "executed":
+                            raise LeanActionsError(f"حالة تركيبة العتبات {threshold_id} غير صالحة.")
+                        meta = result.get("metadata", {})
+                        report = result.get("lean_report", {})
+                        if meta.get("strategy") != threshold_id or report.get("strategy") != threshold_id:
+                            raise LeanActionsError(f"هوية تركيبة العتبات {threshold_id} لا تطابق تقرير LEAN.")
+                        if meta.get("market_data_source") != common.get("market_data_source"):
+                            raise LeanActionsError(f"مصدر بيانات {threshold_id} لا يطابق تاريخ الفريم.")
+                        if (
+                            int(meta.get("raw_bars", 0)) < 1200
+                            or int(report.get("signals", -1)) != int(meta.get("signals_count", -2))
+                        ):
+                            raise LeanActionsError(f"بيانات أو إشارات {threshold_id} غير مكتملة.")
+                        expected_bars = int(meta.get("bars_count", -1))
+                        if not (
+                            expected_bars == int(report.get("bars", -2))
+                            == int(report.get("received_bars", -3))
+                        ):
+                            raise LeanActionsError(f"LEAN لم يستقبل كل شموع {threshold_id}.")
+                        if (
+                            int(report.get("reader_parsed_rows", -1)) != expected_bars
+                            or int(report.get("reader_unique_timestamps", -1)) != expected_bars
+                            or report.get("order_errors")
+                        ):
+                            raise LeanActionsError(f"لم يجتز تنفيذ LEAN والتحقق من الشموع لتركيبة {threshold_id}.")
+                        for field in ("score_threshold", "ai_threshold"):
+                            if not isinstance(meta.get(field), (int, float)):
+                                raise LeanActionsError(f"عتبات {threshold_id} غير موثقة.")
+                    if baseline_id is not None and baseline_id not in seen:
+                        raise LeanActionsError("خط الأساس للعتبات الحية غير موجود ضمن النتائج.")
+                report_text = self.format_threshold_test_report(summary)
             else:
                 for item in timeframes:
                     meta = item.get("metadata", {})
