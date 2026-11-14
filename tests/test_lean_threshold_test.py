@@ -99,9 +99,9 @@ class LeanThresholdMetricsTests(unittest.TestCase):
     def test_lean_gross_and_net_metrics_use_trade_ledger_and_split_by_exit_time(self):
         report = {
             "trades_detail": [
-                {"signal_time": "2026-01-01T00:00:00+00:00", "exit_time": "2026-01-01T01:00:00+00:00", "gross_r": 2.0, "net_r": 1.95},
-                {"signal_time": "2026-01-02T00:00:00+00:00", "exit_time": "2026-01-02T01:00:00+00:00", "gross_r": -1.0, "net_r": -1.05},
-                {"signal_time": "2026-01-04T00:00:00+00:00", "exit_time": "2026-01-04T01:00:00+00:00", "gross_r": 2.0, "net_r": 1.95},
+                {"signal_time": "2026-01-01T00:00:00+00:00", "exit_time": "2026-01-01T01:00:00+00:00", "direction": "BUY", "gross_r": 2.0, "net_r": 1.95},
+                {"signal_time": "2026-01-02T00:00:00+00:00", "exit_time": "2026-01-02T01:00:00+00:00", "direction": "SELL", "gross_r": -1.0, "net_r": -1.05},
+                {"signal_time": "2026-01-04T00:00:00+00:00", "exit_time": "2026-01-04T01:00:00+00:00", "direction": "BUY", "gross_r": 2.0, "net_r": 1.95},
             ]
         }
         metrics = _candidate_metrics(
@@ -112,6 +112,16 @@ class LeanThresholdMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["calibration_net"]["net_after_cost_r"], 0.90)
         self.assertEqual(metrics["holdout_net"]["trades"], 1)
         self.assertAlmostEqual(metrics["holdout_cost_010R"]["net_after_cost_r"], 1.90)
+        self.assertEqual(metrics["directional"]["BUY"]["calibration_net"]["trades"], 1)
+        self.assertAlmostEqual(
+            metrics["directional"]["BUY"]["calibration_net"]["net_after_cost_r"], 1.95
+        )
+        self.assertEqual(metrics["directional"]["SELL"]["calibration_net"]["trades"], 1)
+        self.assertAlmostEqual(
+            metrics["directional"]["SELL"]["calibration_net"]["net_after_cost_r"], -1.05
+        )
+        self.assertEqual(metrics["directional"]["BUY"]["holdout_net"]["trades"], 1)
+        self.assertEqual(metrics["directional"]["SELL"]["holdout_net"]["trades"], 0)
 
     def test_candidate_selection_uses_calibration_not_holdout(self):
         best_calibration = {
