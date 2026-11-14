@@ -82,9 +82,9 @@ jobs:
 
       - name: Verify real OHLC and all threshold candidates
         env:
-          OUTPUT_DIR: \${{ runner.temp }}/lean-threshold/input
-          REQUEST_ID: \${{ inputs.request_id }}
-          ASSET: \${{ inputs.asset }}
+          OUTPUT_DIR: ${{ runner.temp }}/lean-threshold/input
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
         run: |
           python - <<'PY'
           import csv, json, os, pathlib
@@ -204,7 +204,7 @@ jobs:
       - name: Pull official LEAN engine
         run: docker pull --platform linux/arm64 quantconnect/lean:latest
 
-      - name: Execute every eligible strategy inside LEAN
+      - name: Execute every eligible threshold candidate inside LEAN
         env:
           LEAN_DIR: ${{ runner.temp }}/lean-threshold
           PREPARED_DIR: ${{ runner.temp }}/lean-threshold/input
@@ -272,7 +272,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Notify Render so the LEAN lab report is delivered to Telegram
+      - name: Notify Render so the LEAN threshold report is delivered to Telegram
         if: always()
         env:
           CALLBACK_URL: ${{ inputs.callback_url }}
