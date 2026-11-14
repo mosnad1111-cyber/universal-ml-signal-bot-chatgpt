@@ -340,7 +340,7 @@ class Engine:
         pf = summary['profit_factor']
         pf_text = '∞' if pf == float('inf') else f'{pf:.2f}'
         return (f"{summary['trades']} صفقة | WR {summary['win_rate']:.1f}% | "
-                f"Net {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | PF {pf_text}")
+                f"R الإجمالي {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | PF {pf_text}")
 
     def stats_text(self):
         recent = [dict(row) for row in self.db.recent(10000)]
@@ -375,7 +375,7 @@ class Engine:
                 f'✅ TP: {targets} | ❌ SL: {stops} | ⏳ TIMEOUT: {timeouts}',
                 f"📈 رابحة/خاسرة/تعادل حسب R: {overall['wins']}/{overall['losses']}/{overall['flats']}",
                 f"🎯 نسبة الصفقات ذات R موجب: <b>{overall['win_rate']:.1f}%</b>",
-                f"⚖️ صافي R: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
+                f"⚖️ إجمالي R قبل التكاليف: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
                 f"💰 متوسط الربح: {overall['avg_win']:+.2f}R | متوسط الخسارة: {overall['avg_loss']:+.2f}R | PF: {pf_text}",
                 f"📉 أقصى تراجع: {overall['max_drawdown']:.2f}R | أطول سلسلة ربح/خسارة: {overall['max_win_streak']}/{overall['max_loss_streak']}",
             ])
