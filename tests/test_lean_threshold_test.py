@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.prepare_lean_threshold_test import _write_candidate, threshold_id
+from scripts.prepare_lean_threshold_test import _write_candidate, threshold_axes, threshold_id
 from scripts.summarize_lean_threshold_test import (
     _candidate_metrics,
     select_calibration_candidates,
@@ -16,6 +16,14 @@ class LeanThresholdPreparationTests(unittest.TestCase):
     def test_threshold_id_is_stable_and_encodes_both_values(self):
         self.assertEqual(threshold_id(60, 0.30), "score_060_ai_030")
         self.assertEqual(threshold_id(75, 0.60), "score_075_ai_060")
+
+    def test_grid_includes_24_combinations_and_live_baseline_for_each_timeframe(self):
+        from config import thresholds_for
+        for timeframe in ("5m", "15m", "1h"):
+            scores, ai_values, live_score, live_ai = threshold_axes(timeframe)
+            self.assertEqual(len(scores) * len(ai_values), 24)
+            self.assertIn(live_score, scores)
+            self.assertIn(live_ai, ai_values)
 
     def test_candidate_writes_decision_only_signals_aligned_to_shared_ohlc(self):
         with tempfile.TemporaryDirectory() as tmp:
