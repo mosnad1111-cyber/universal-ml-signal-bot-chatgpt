@@ -541,10 +541,12 @@ class LeanActionsClient:
                 return {"ok": True, "workflow_conclusion": workflow_conclusion or "failure"}, 200
 
             # Artifact upload is the last successful step before this callback.
-            summary = self._read_artifact(
-                int(run_id), request_id,
-                strategy_lab=strategy_lab, threshold_test=threshold_test,
-            )
+            if threshold_test:
+                summary = self._read_artifact(int(run_id), request_id, threshold_test=True)
+            elif strategy_lab:
+                summary = self._read_artifact(int(run_id), request_id, strategy_lab=True)
+            else:
+                summary = self._read_artifact(int(run_id), request_id)
             if summary.get("synthetic_fixture") is not False:
                 raise LeanActionsError("رفض التقرير: وسم synthetic_fixture غير مطابق.")
             if summary.get("market_data_type") != "real_historical_ohlc":
