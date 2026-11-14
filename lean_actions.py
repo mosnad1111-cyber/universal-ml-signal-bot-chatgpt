@@ -646,8 +646,24 @@ class LeanActionsClient:
                         for field in ("score_threshold", "ai_threshold"):
                             if not isinstance(meta.get(field), (int, float)):
                                 raise LeanActionsError(f"عتبات {threshold_id} غير موثقة.")
-                    if baseline_id is not None and baseline_id not in seen:
-                        raise LeanActionsError("خط الأساس للعتبات الحية غير موجود ضمن النتائج.")
+                    executed_baselines = [
+                        item for item in results
+                        if item.get("status") == "executed"
+                        and item.get("metadata", {}).get("is_live_baseline") is True
+                    ]
+                    if int(section.get("executed_candidates", 0)) > 0 and len(executed_baselines) != 1:
+                        raise LeanActionsError("يجب أن يحتوي كل فريم على خط أساس حي واحد ضمن نتائج LEAN.")
+                    if executed_baselines:
+                        baseline_meta = executed_baselines[0].get("metadata", {})
+                        if baseline_id != executed_baselines[0].get("threshold_id"):
+                            raise LeanActionsError("معرّف خط الأساس لا يطابق تركيبة العتبات الحية.")
+                        if (
+                            not math.isclose(float(baseline_meta.get("score_threshold", -1)), float(active["score"]), abs_tol=1e-9)
+                            or not math.isclose(float(baseline_meta.get("ai_threshold", -1)), float(active["ai"]), abs_tol=1e-9)
+                        ):
+                            raise LeanActionsError("تركيبة خط الأساس لا تطابق العتبات التشغيلية الحالية.")
+                    elif baseline_id is not None:
+                        raise LeanActionsError("خط الأساس في الملخص لا يطابق أي نتيجة منفذة.")
                 report_text = self.format_threshold_test_report(summary)
             else:
                 for item in timeframes:
