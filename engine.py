@@ -279,60 +279,136 @@ class Engine:
                 traceback.print_exc()
             time.sleep(SCAN_SECONDS)
 
+    @staticmethod
+    def _realized_r(row):
+        """Return outcome in R; this signal ledger contains no broker transaction costs."""
+        try:
+            risk = abs(float(row['entry']) - float(row['sl']))
+            if not risk or not pd.notna(risk):
+                return None
+            result = row.get('result')
+            if result == 'TP':
+                return abs(float(row['tp']) - float(row['entry'])) / risk
+            if result == 'SL':
+                return -1.0
+            close_price = row.get('close_price')
+            if result == 'TIMEOUT' and close_price is not None:
+                move = float(close_price) - float(row['entry'])
+                if row.get('direction') == 'SELL':
+                    move = -move
+                return move / risk
+            return 0.0
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    @staticmethod
+    def _performance_summary(trades):
+        ordered = sorted(trades, key=lambda item: (str(item.get('closed_at') or ''), int(item.get('id') or 0)))
+        values = [float(item['_r']) for item in ordered]
+        winners = [value for value in values if value > 1e-12]
+        losers = [value for value in values if value < -1e-12]
+        gross_profit, gross_loss = sum(winners), abs(sum(losers))
+        equity = peak = max_dd = 0.0
+        win_streak = loss_streak = max_win_streak = max_loss_streak = 0
+        for value in values:
+            equity += value
+            peak = max(peak, equity)
+            max_dd = max(max_dd, peak - equity)
+            if value > 1e-12:
+                win_streak += 1; loss_streak = 0
+            elif value < -1e-12:
+                loss_streak += 1; win_streak = 0
+            else:
+                win_streak = loss_streak = 0
+            max_win_streak = max(max_win_streak, win_streak)
+            max_loss_streak = max(max_loss_streak, loss_streak)
+        count = len(values)
+        return {
+            'trades': count, 'wins': len(winners), 'losses': len(losers),
+            'flats': count - len(winners) - len(losers),
+            'win_rate': 100.0 * len(winners) / count if count else 0.0,
+            'net_r': sum(values), 'expectancy': sum(values) / count if count else 0.0,
+            'profit_factor': gross_profit / gross_loss if gross_loss else (float('inf') if gross_profit else 0.0),
+            'avg_win': sum(winners) / len(winners) if winners else 0.0,
+            'avg_loss': sum(losers) / len(losers) if losers else 0.0,
+            'max_drawdown': max_dd, 'max_win_streak': max_win_streak,
+            'max_loss_streak': max_loss_streak,
+        }
+
+    @staticmethod
+    def _fmt_performance(summary):
+        pf = summary['profit_factor']
+        pf_text = '∞' if pf == float('inf') else f'{pf:.2f}'
+        return (f"{summary['trades']} صفقة | WR {summary['win_rate']:.1f}% | "
+                f"Net {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | PF {pf_text}")
+
     def stats_text(self):
-        lines = ['📊 <b>إحصائيات الأصول</b>']
-        recent = self.db.recent(1000)
+        recent = self.db.recent(10000)
+        lines = [
+            '📊 <b>تقرير الأداء التفصيلي</b>',
+            'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة فقط.',
+            'النتائج بوحدة R قبل السبريد والانزلاق وعمولات الوسيط الفعلية؛ هذه ليست صافي نتيجة وسيط.',
+        ]
         for asset in ASSETS.values():
             symbol = asset['symbol']
             ai = self.ai[symbol]
-            rows = [r for r in recent if r['symbol'] == symbol and r['status'] == 'CLOSED']
-            targets = sum(r['result'] == 'TP' for r in rows)
-            stops = sum(r['result'] == 'SL' for r in rows)
-            timeouts = sum(r['result'] == 'TIMEOUT' for r in rows)
-            profitable = 0
-            losing = 0
-            valid_rows = 0
-            net_r = 0.0
-            for row in rows:
-                risk = abs(float(row['entry']) - float(row['sl']))
-                if risk <= 0:
-                    continue
-                valid_rows += 1
-                if row['result'] == 'TP':
-                    realized_r = abs(float(row['tp']) - float(row['entry'])) / risk
-                elif row['result'] == 'SL':
-                    realized_r = -1.0
-                elif row['close_price'] is not None:
-                    move = float(row['close_price']) - float(row['entry'])
-                    if row['direction'] == 'SELL':
-                        move = -move
-                    realized_r = move / risk
-                else:
-                    realized_r = 0.0
-                net_r += realized_r
-                if realized_r > 0:
-                    profitable += 1
-                elif realized_r < 0:
-                    losing += 1
-            wr = 100 * profitable / valid_rows if valid_rows else 0
-            lines += [
-                '',
-                f'{asset["icon"]} <b>{asset["label"]}</b>',
-                f'الصفقات المغلقة: <b>{len(rows)}</b>',
-                f'✅ الهدف: {targets} | ❌ الوقف: {stops} | ⏳ المهلة: {timeouts}',
-                f'📈 نسبة الربح الفعلية: <b>{wr:.1f}%</b>',
-                f'⚖️ صافي النتيجة: <b>{net_r:+.1f}R</b>',
-                '🧠 <b>تحقق النموذج</b>'
-            ]
+            asset_rows = [row for row in recent if row['symbol'] == symbol]
+            closed = [row for row in asset_rows if row['status'] == 'CLOSED']
+            waiting = sum(row['status'] == 'WAITING' for row in asset_rows)
+            active = sum(row['status'] == 'ACTIVE' for row in asset_rows)
+            targets = sum(row.get('result') == 'TP' for row in closed)
+            stops = sum(row.get('result') == 'SL' for row in closed)
+            timeouts = sum(row.get('result') == 'TIMEOUT' for row in closed)
+            trades = []
+            for row in closed:
+                realized = self._realized_r(row)
+                if realized is not None:
+                    enriched = dict(row); enriched['_r'] = realized; trades.append(enriched)
+            overall = self._performance_summary(trades)
+            scores = [float(row['score']) for row in trades if row.get('score') is not None]
+            probabilities = [float(row['ai_prob']) for row in trades if row.get('ai_prob') is not None]
+            pf = overall['profit_factor']
+            pf_text = '∞' if pf == float('inf') else f'{pf:.2f}'
+            lines.extend([
+                '', f"{asset['icon']} <b>{asset['label']}</b>",
+                f'📌 بانتظار الدخول: {waiting} | 🟢 مفعّلة: {active} | 🔒 مغلقة: {len(closed)}',
+                f'✅ TP: {targets} | ❌ SL: {stops} | ⏳ TIMEOUT: {timeouts}',
+                f"📈 رابحة/خاسرة/تعادل حسب R: {overall['wins']}/{overall['losses']}/{overall['flats']}",
+                f"🎯 نسبة الصفقات ذات R موجب: <b>{overall['win_rate']:.1f}%</b>",
+                f"⚖️ صافي R: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
+                f"💰 متوسط الربح: {overall['avg_win']:+.2f}R | متوسط الخسارة: {overall['avg_loss']:+.2f}R | PF: {pf_text}",
+                f"📉 أقصى تراجع: {overall['max_drawdown']:.2f}R | أطول سلسلة ربح/خسارة: {overall['max_win_streak']}/{overall['max_loss_streak']}",
+            ])
+            if scores: lines.append(f'🧮 متوسط Score: {sum(scores) / len(scores):.1f}/100')
+            if probabilities: lines.append(f'🧠 متوسط AI: {sum(probabilities) / len(probabilities) * 100:.1f}%')
+            lines.append('⏱️ <b>تفصيل الفريمات والاتجاهات</b>')
+            for tf in TIMEFRAMES:
+                tf_trades = [row for row in trades if row.get('timeframe') == tf]
+                if not tf_trades:
+                    lines.append(f'{tf}: لا توجد صفقات مغلقة.'); continue
+                tf_summary = self._performance_summary(tf_trades)
+                lines.append(f"{tf}: {self._fmt_performance(tf_summary)} | DD {tf_summary['max_drawdown']:.2f}R")
+                for direction in ('BUY', 'SELL'):
+                    directional = [row for row in tf_trades if row.get('direction') == direction]
+                    if directional:
+                        lines.append(f"  {'🟢 شراء' if direction == 'BUY' else '🔴 بيع'}: {self._fmt_performance(self._performance_summary(directional))}")
+            lines.append('🧠 <b>تفاصيل تقييم النموذج حسب الفريم</b>')
             metrics = ai.info()
             for tf in TIMEFRAMES:
                 value = metrics.get(tf, {})
-                if value:
-                    lines.append(f'{tf}: {value.get("engine", "-")} | AUC {value.get("auc", 0):.3f} | Acc {value.get("accuracy", 0):.3f}')
-                else:
-                    lines.append(f'{tf}: ❌ {ai.errors.get(tf, "غير متوفر")}')
-        return '\n'.join(lines)
-
+                if not value:
+                    lines.append(f"{tf}: ❌ {ai.errors.get(tf, 'بيانات النموذج غير متوفرة')}"); continue
+                auc, accuracy = value.get('auc'), value.get('accuracy')
+                auc_text = f'{float(auc):.3f}' if auc is not None else '—'
+                acc_text = f'{float(accuracy):.3f}' if accuracy is not None else '—'
+                training_rows = int(value.get('deployment_training_rows', value.get('training_rows', 0)) or 0)
+                lines.append(f"{tf}: {value.get('engine', '-')} | AUC {auc_text} | Accuracy {acc_text} | تدريب {training_rows:,} صف")
+                if value.get('validation_rows') is not None:
+                    lines.append(f"  تحقق: {int(value['validation_rows']):,} صف | إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | دقة خط الأساس {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%")
+                for label, key in (('BUY','buy_auc'),('SELL','sell_auc')):
+                    if value.get(key) is not None: lines.append(f"  AUC {label}: {float(value[key]):.3f}")
+            lines.append('ℹ️ AUC وAccuracy يقيسان عينة تحقق النموذج ولا يمثلان مباشرةً نسبة نجاح الصفقات.')
+        return '\\n'.join(lines)
     def start(self):
         """Start the background market scanner and open-trade monitor."""
         if getattr(self, "_started", False):
