@@ -82,9 +82,9 @@ jobs:
 
       - name: Verify shared real OHLC and complete strategy-threshold matrix
         env:
-          OUTPUT_DIR: \${{ runner.temp }}/lean-lab/input
-          REQUEST_ID: \${{ inputs.request_id }}
-          ASSET: \${{ inputs.asset }}
+          OUTPUT_DIR: ${{ runner.temp }}/lean-lab/input
+          REQUEST_ID: ${{ inputs.request_id }}
+          ASSET: ${{ inputs.asset }}
         run: |
           python - <<'PY'
           import csv, json, os, pathlib
@@ -242,9 +242,9 @@ jobs:
 
       - name: Execute every strategy-threshold candidate inside LEAN
         env:
-          LEAN_DIR: \${{ runner.temp }}/lean-lab
-          PREPARED_DIR: \${{ runner.temp }}/lean-lab/input
-          TIMEFRAMES: \${{ inputs.timeframes }}
+          LEAN_DIR: ${{ runner.temp }}/lean-lab
+          PREPARED_DIR: ${{ runner.temp }}/lean-lab/input
+          TIMEFRAMES: ${{ inputs.timeframes }}
         shell: bash
         run: |
           set -euo pipefail
@@ -257,7 +257,7 @@ jobs:
               for CANDIDATE_INPUT in "$STRATEGY_INPUT"/*; do
                 [ -d "$CANDIDATE_INPUT" ] || continue
                 threshold_id="$(basename "$CANDIDATE_INPUT")"
-                candidate_id="\${strategy}__\${threshold_id}"
+                candidate_id="${strategy}__${threshold_id}"
                 if [ ! -f "$CANDIDATE_INPUT/metadata.json" ]; then
                   echo "Skipping $tf/$candidate_id: candidate was not testable."
                   continue
