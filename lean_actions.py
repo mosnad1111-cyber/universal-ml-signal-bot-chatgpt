@@ -624,6 +624,27 @@ class LeanActionsClient:
                             continue
                         if result.get("status") != "executed":
                             raise LeanActionsError(f"حالة استراتيجية {strategy} غير صالحة.")
+                        directional = result.get("directional")
+                        if not isinstance(directional, dict) or set(directional) != {"BUY", "SELL"}:
+                            raise LeanActionsError(f"تفصيل BUY/SELL غير مكتمل في استراتيجية {strategy}.")
+                        for direction in ("BUY", "SELL"):
+                            side = directional.get(direction) or {}
+                            for field in ("all", "calibration", "holdout",
+                                          "holdout_cost_005R", "holdout_cost_010R"):
+                                if not isinstance(side.get(field), dict):
+                                    raise LeanActionsError(
+                                        f"مقاييس {direction} غير مكتملة في استراتيجية {strategy}."
+                                    )
+                        for split_name in ("all", "calibration", "holdout"):
+                            side_total = sum(
+                                int(directional[direction][split_name].get("trades", -1))
+                                for direction in ("BUY", "SELL")
+                            )
+                            combined_total = int(result.get(split_name, {}).get("trades", -2))
+                            if side_total != combined_total:
+                                raise LeanActionsError(
+                                    f"عدد صفقات BUY/SELL لا يطابق الإجمالي في {strategy}/{split_name}."
+                                )
                         meta = result.get("metadata", {})
                         report = result.get("lean_report", {})
                         if meta.get("strategy") != strategy or report.get("strategy") != strategy:
