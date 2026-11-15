@@ -87,7 +87,29 @@ class DB:
                 features_json TEXT,
                 UNIQUE(symbol,timeframe,wave_key));
                 CREATE TABLE IF NOT EXISTS settings(
-                key TEXT PRIMARY KEY,value TEXT);"""
+                key TEXT PRIMARY KEY,value TEXT);
+                CREATE TABLE IF NOT EXISTS paper_trades(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trial_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry REAL NOT NULL,
+                sl REAL NOT NULL,
+                tp REAL NOT NULL,
+                score REAL,
+                ai_prob REAL,
+                status TEXT NOT NULL,
+                result TEXT,
+                created_at TEXT NOT NULL,
+                candle_time TEXT NOT NULL,
+                activated_at TEXT,
+                activation_candle_time TEXT,
+                closed_at TEXT,
+                close_price REAL,
+                UNIQUE(trial_id,symbol,timeframe,candle_time));
+                CREATE INDEX IF NOT EXISTS idx_paper_trial_status ON paper_trades(trial_id,status);"""
             )
             cols = {r[1] for r in c.execute("PRAGMA table_info(signals)")}
             if "features_json" not in cols:
@@ -127,6 +149,33 @@ class DB:
                     key TEXT PRIMARY KEY,
                     value TEXT
                 )"""
+            )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS paper_trades(
+                    id BIGSERIAL PRIMARY KEY,
+                    trial_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry DOUBLE PRECISION NOT NULL,
+                    sl DOUBLE PRECISION NOT NULL,
+                    tp DOUBLE PRECISION NOT NULL,
+                    score DOUBLE PRECISION,
+                    ai_prob DOUBLE PRECISION,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    created_at TEXT NOT NULL,
+                    candle_time TEXT NOT NULL,
+                    activated_at TEXT,
+                    activation_candle_time TEXT,
+                    closed_at TEXT,
+                    close_price DOUBLE PRECISION,
+                    UNIQUE(trial_id,symbol,timeframe,candle_time)
+                )"""
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_trial_status ON paper_trades(trial_id,status)"
             )
             c.execute(
                 "ALTER TABLE signals ADD COLUMN IF NOT EXISTS features_json TEXT"
@@ -295,3 +344,75 @@ class DB:
             return self._execute(
                 c, "SELECT * FROM signals ORDER BY id DESC LIMIT ?", (n,)
             ).fetchall()
+
+    def paper_create(self, trade):
+        """Insert an isolated paper-only trade; never touches the live signals ledger."""
+        now = datetime.now(timezone.utc).isoformat()
+        values = (
+            trade["trial_id"], trade["symbol"], trade["timeframe"],
+            trade["strategy"], trade["direction"], float(trade["entry"]),
+            float(trade["sl"]), float(trade["tp"]), float(trade["score"]),
+            float(trade["ai_prob"]), "WAITING", now, str(trade["candle_time"]),
+        )
+        query = """INSERT INTO paper_trades(
+            trial_id,symbol,timeframe,strategy,direction,entry,sl,tp,score,ai_prob,
+            status,created_at,candle_time
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        with self.lock, self._conn() as c:
+            if self.backend == "postgres":
+                row = self._execute(
+                    c,
+                    query + " ON CONFLICT(trial_id,symbol,timeframe,candle_time) DO NOTHING RETURNING id",
+                    values,
+                ).fetchone()
+                return int(row["id"]) if row else None
+            cur = self._execute(c, "INSERT OR IGNORE" + query[len("INSERT"):], values)
+            return int(cur.lastrowid) if cur.rowcount else None
+
+    def paper_open(self, trial_id, symbol, timeframe):
+        with self.lock, self._conn() as c:
+            return self._execute(
+                c,
+                """SELECT * FROM paper_trades
+                   WHERE trial_id=? AND symbol=? AND timeframe=?
+                     AND status IN ('WAITING','ACTIVE')
+                   ORDER BY id DESC LIMIT 1""",
+                (trial_id, symbol, timeframe),
+            ).fetchone()
+
+    def paper_all(self, trial_id):
+        with self.lock, self._conn() as c:
+            return self._execute(
+                c,
+                "SELECT * FROM paper_trades WHERE trial_id=? ORDER BY created_at,id",
+                (trial_id,),
+            ).fetchall()
+
+    def paper_activate(self, trade_id, candle_time):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.lock, self._conn() as c:
+            self._execute(
+                c,
+                """UPDATE paper_trades SET status='ACTIVE',activated_at=?,
+                   activation_candle_time=? WHERE id=? AND status='WAITING'""",
+                (now, str(candle_time), trade_id),
+            )
+
+    def paper_set_activation_candle(self, trade_id, candle_time):
+        with self.lock, self._conn() as c:
+            self._execute(
+                c,
+                """UPDATE paper_trades SET activation_candle_time=?
+                   WHERE id=? AND status='ACTIVE' AND activation_candle_time IS NULL""",
+                (str(candle_time), trade_id),
+            )
+
+    def paper_close(self, trade_id, result, price):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.lock, self._conn() as c:
+            self._execute(
+                c,
+                """UPDATE paper_trades SET status='CLOSED',result=?,closed_at=?,close_price=?
+                   WHERE id=? AND status IN ('WAITING','ACTIVE')""",
+                (result, now, float(price), trade_id),
+            )
