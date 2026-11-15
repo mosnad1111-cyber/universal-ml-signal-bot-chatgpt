@@ -58,6 +58,7 @@ class Telegram:
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'⚙️ LEAN تاريخي حقيقي — الذهب','callback_data':'lean_menu:GOLD'}, {'text':'⚙️ LEAN تاريخي حقيقي — BTC','callback_data':'lean_menu:BTC'}],
             [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
+            [{'text':'🧪 تقرير Paper BTC 1h','callback_data':'paper:report'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
@@ -227,7 +228,7 @@ class Telegram:
                 'سيختبر أربع استراتيجيات، ولكل استراتيجية شبكة عتبات Score/AI كاملة على 5m و15m و1h.\n'
                 'كل استراتيجية لها Walk-Forward مستقل واحد لكل فريم، وتُنفّذ كل تركيبة عتبات داخل LEAN باستخدام OHLC التاريخي نفسه.\n'
                 'سيعرض التقرير أفضل استراتيجية مع أفضل عتبة، ونتائج BUY وSELL، مع فصل Calibration عن Holdout.\n'
-                'هذا اختبار بحثي فقط؛ لا تتغير إشارات التداول الحية أو عتباتها تلقائيًا.',
+                'المختبر يطلب 20,000 شمعة لكل فريم عند توفرها. اختبار BTC الورقي مستقل لمدة 7 أيام: trend_pullback وScore 65 وAI 60%. إشارات التداول الحية لا تتغير.',
                 cid,
             )
             self.lean_client.dispatch_strategy_lab(request_id, asset_key, timeframes)
@@ -285,6 +286,8 @@ class Telegram:
                         elif data.startswith('lab:'):
                             asset_key = data.split(':', 1)[1].upper()
                             self._strategy_lab(cid, asset_key)
+                        elif data == 'paper:report':
+                            self.send_long(self.engine.paper_trial_text(), cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
