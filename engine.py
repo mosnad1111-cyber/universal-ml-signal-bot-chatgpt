@@ -286,6 +286,9 @@ class Engine:
                 self.paper_ai.errors.get('1h', 'paper_model_fit_returned_false')
             )
         self.paper_last_model = time.time()
+        self.db.set_setting(
+            'paper_trial_model_trained_at', datetime.now(timezone.utc).isoformat()
+        )
         info = self.paper_ai.metrics.get('1h', {})
         print(
             '[paper-trial] BTC 1h trend_pullback model trained '
@@ -302,7 +305,9 @@ class Engine:
             return None
         if '1h' not in self.paper_ai.models:
             return None
-        df = fetch(symbol, '1h', period=PAPER_MODEL_HISTORY_BARS)
+        # Reuse the live scanner's normal 1h cache; 5,000 recent candles are ample for features.
+        # The 20,000-bar fetch is reserved for the initial strategy-specific model fit.
+        df = fetch(symbol, '1h')
         x = self._enrich('1h', add_features(df).dropna(), symbol)
         if len(x) < 220:
             return None
@@ -466,12 +471,16 @@ class Engine:
             'paper_trial_data_source',
             'Binance Spot REST BTC/USDT historical klines',
         )
+        model_trained_at = self.db.get_setting(
+            'paper_trial_model_trained_at', 'غير متاح'
+        )
         lines = [
             '🧪 <b>تقرير التجربة الورقية المستقلة — BTC/USDT 1h</b>',
             f'الحالة: <b>{status}</b>',
             f'الفترة: {start_text} → {end_text} ({PAPER_TRIAL_DAYS} أيام)',
             'الاستراتيجية: trend_pullback | Score ≥ 65 | AI ≥ 60%',
             f'مصدر OHLC: {source}',
+            f'آخر تدريب للنموذج: {model_trained_at}',
             '',
             f'الإشارات/الصفقات المسجلة: {len(rows)}',
             f'بانتظار الدخول: {waiting} | مفعّلة: {active} | مغلقة: {len(closed)}',
@@ -515,9 +524,9 @@ class Engine:
             end = pd.Timestamp(self.paper_trial_end_utc)
             if start <= now < end:
                 epoch = time.time()
-                refresh_due = epoch - self.paper_last_model >= MODEL_REFRESH_HOURS * 3600
                 retry_ready = epoch - self.paper_last_train_attempt >= 300
-                if ('1h' not in self.paper_ai.models or refresh_due) and retry_ready:
+                # Keep one fixed model throughout the seven-day forward sample.
+                if '1h' not in self.paper_ai.models and retry_ready:
                     self.paper_last_train_attempt = epoch
                     try:
                         self._train_paper_model()
