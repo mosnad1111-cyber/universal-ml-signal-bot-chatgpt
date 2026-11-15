@@ -54,6 +54,30 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         self.assertIn("PREPARED_DIR: ${{ runner.temp }}/lean-lab/input", workflow)
         self.assertIn('candidate_id="${strategy}__${threshold_id}"', workflow)
 
+    def test_btc_paper_trial_is_isolated_from_live_signal_pipeline(self):
+        engine = (ROOT / "engine.py").read_text(encoding="utf-8")
+        database = (ROOT / "db.py").read_text(encoding="utf-8")
+        telegram = (ROOT / "telegram_ar.py").read_text(encoding="utf-8")
+        self.assertIn("self.paper_ai = GoldAI()", engine)
+        self.assertIn("strategy='trend_pullback'", engine)
+        self.assertIn("PAPER_MIN_SCORE", engine)
+        self.assertIn("PAPER_MIN_AI_PROB", engine)
+        self.assertIn("self.db.paper_create(setup)", engine)
+        self.assertIn("target=self.paper_scanner", engine)
+        self.assertIn("CREATE TABLE IF NOT EXISTS paper_trades", database)
+        self.assertIn("def paper_create", database)
+        self.assertIn("paper:report", telegram)
+        self.assertIn("self.ai = {a['symbol']: GoldAI() for a in ASSETS.values()}", engine)
+
+    def test_research_history_uses_the_extended_configurable_targets(self):
+        config = (ROOT / "config.py").read_text(encoding="utf-8")
+        preparation = (ROOT / "scripts/prepare_lean_strategy_lab.py").read_text(encoding="utf-8")
+        self.assertIn("STRATEGY_LAB_BARS_5M", config)
+        self.assertIn("STRATEGY_LAB_BARS_15M", config)
+        self.assertIn("STRATEGY_LAB_BARS_1H", config)
+        self.assertIn("PAPER_MODEL_HISTORY_BARS", config)
+        self.assertIn("max(STRATEGY_LAB_BARS_1H, BACKTEST_BARS_1H)", preparation)
+
     def test_lean_report_records_candidate_identity_and_fixed_unit_execution(self):
         algorithm = (ROOT / "lean_runtime/LeanBacktestAlgorithm.py").read_text(encoding="utf-8")
         self.assertIn('"strategy": self.metadata.get("strategy", "baseline")', algorithm)
