@@ -294,6 +294,21 @@ class LeanActionsClient:
         )
 
     @classmethod
+    def _format_lab_directional(cls, direction: str, metric: dict[str, Any]) -> str:
+        calibration = metric.get("calibration", {})
+        holdout = metric.get("holdout", {})
+        cost_005 = metric.get("holdout_cost_005R", {})
+        cost_010 = metric.get("holdout_cost_010R", {})
+        label = "BUY شراء" if direction == "BUY" else "SELL بيع"
+        return (
+            f"  {label} | المعايرة: {cls._format_lab_metric(calibration)} | "
+            f"Holdout: {cls._format_lab_metric(holdout)} | "
+            f"صافي Holdout بعد التكلفة: "
+            f"{float(cost_005.get('net_after_cost_r', 0.0)):+.2f}R عند 0.05R؛ "
+            f"{float(cost_010.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R"
+        )
+
+    @classmethod
     def format_strategy_lab_report(cls, summary: dict[str, Any]) -> str:
         asset_labels = {"GOLD": "الذهب XAU/USD", "BTC": "البيتكوين BTC/USDT"}
         names = summary.get("strategy_names") or LAB_STRATEGY_NAMES
@@ -345,6 +360,11 @@ class LeanActionsClient:
                     f"  صافي الاحتجاز بعد التكلفة: {float(c05.get('net_after_cost_r', 0.0)):+.2f}R "
                     f"عند 0.05R/صفقة؛ {float(c10.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R/صفقة"
                 )
+                directional = result.get("directional", {})
+                for direction in ("BUY", "SELL"):
+                    lines.append(cls._format_lab_directional(
+                        direction, directional.get(direction, {})
+                    ))
                 report = result.get("lean_report", {})
                 lines.append(
                     f"  قرارات الاستراتيجية: {int(result.get('signals_count', 0))} | "
