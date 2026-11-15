@@ -575,7 +575,7 @@ class LeanActionsClient:
                 raise LeanActionsError("Only manually dispatched LEAN runs are accepted.")
             expected_title = (
                 f"LEAN threshold test {request_id}" if threshold_test
-                else (f"LEAN strategy lab {request_id}" if strategy_lab
+                else (f"LEAN strategy x thresholds {request_id}" if strategy_lab
                       else f"LEAN historical backtest {request_id}")
             )
             display_title = run.get("display_title")
@@ -645,62 +645,126 @@ class LeanActionsClient:
             if got != set(expected_timeframes):
                 raise LeanActionsError("الفريمات الموجودة في التقرير لا تطابق الطلب.")
             if strategy_lab:
-                if summary.get("report_type") != "LEAN real historical strategy research lab":
-                    raise LeanActionsError("نوع التقرير لا يطابق مختبر الاستراتيجيات على LEAN.")
+                if summary.get("report_type") != "LEAN real historical strategy-threshold lab":
+                    raise LeanActionsError("نوع التقرير لا يطابق المختبر الموحد للاستراتيجيات والعتبات.")
+                required_metric_fields = (
+                    "all_gross", "calibration_gross", "holdout_gross",
+                    "all_net", "calibration_net", "holdout_net",
+                    "holdout_cost_005R", "holdout_cost_010R",
+                )
                 for section in timeframes:
                     common = section.get("metadata", {})
                     if not common.get("market_data_source") or int(common.get("raw_bars", 0)) < 1200:
-                        raise LeanActionsError("التاريخ السوقي للمختبر ناقص أو غير موثق.")
+                        raise LeanActionsError("التاريخ السوقي للمختبر الموحد ناقص أو غير موثق.")
+                    scores = section.get("scores") or []
+                    ai_values = section.get("ai_probabilities") or []
+                    threshold_order = section.get("threshold_order") or []
+                    if not scores or not ai_values or len(threshold_order) != len(scores) * len(ai_values):
+                        raise LeanActionsError("شبكة عتبات Score/AI غير مكتملة.")
+                    if len(threshold_order) != len(set(threshold_order)):
+                        raise LeanActionsError("توجد تركيبات عتبات مكررة.")
                     results = section.get("results") or {}
                     if set(results) != set(LAB_STRATEGIES):
-                        raise LeanActionsError("قائمة استراتيجيات المختبر غير مكتملة.")
+                        raise LeanActionsError("قائمة استراتيجيات المختبر الموحد غير مكتملة.")
+                    flat_candidates = {}
                     executed = 0
-                    for strategy, result in results.items():
-                        if result.get("status") == "not_testable":
-                            if not result.get("error"):
-                                raise LeanActionsError(f"سبب عدم اختبار {strategy} غير موثق.")
-                            continue
-                        if result.get("status") != "executed":
-                            raise LeanActionsError(f"حالة استراتيجية {strategy} غير صالحة.")
-                        directional = result.get("directional")
-                        if not isinstance(directional, dict) or set(directional) != {"BUY", "SELL"}:
-                            raise LeanActionsError(f"تفصيل BUY/SELL غير مكتمل في استراتيجية {strategy}.")
-                        for direction in ("BUY", "SELL"):
-                            side = directional.get(direction) or {}
-                            for field in ("all", "calibration", "holdout",
-                                          "holdout_cost_005R", "holdout_cost_010R"):
-                                if not isinstance(side.get(field), dict):
-                                    raise LeanActionsError(
-                                        f"مقاييس {direction} غير مكتملة في استراتيجية {strategy}."
-                                    )
-                        for split_name in ("all", "calibration", "holdout"):
-                            side_total = sum(
-                                int(directional[direction][split_name].get("trades", -1))
-                                for direction in ("BUY", "SELL")
-                            )
-                            combined_total = int(result.get(split_name, {}).get("trades", -2))
-                            if side_total != combined_total:
-                                raise LeanActionsError(
-                                    f"عدد صفقات BUY/SELL لا يطابق الإجمالي في {strategy}/{split_name}."
+                    not_testable = 0
+                    baseline_candidates = 0
+                    for strategy in LAB_STRATEGIES:
+                        strategy_result = results[strategy]
+                        candidate_order = strategy_result.get("candidate_order") or []
+                        candidate_map = strategy_result.get("candidates") or {}
+                        expected_order = [f"{strategy}__{item}" for item in threshold_order]
+                        if candidate_order != expected_order or set(candidate_order) != set(candidate_map):
+                            raise LeanActionsError(f"مصفوفة عتبات {strategy} غير مكتملة.")
+                        strategy_executed = 0
+                        strategy_not_testable = 0
+                        for candidate_id in candidate_order:
+                            item = candidate_map[candidate_id]
+                            if item.get("status") == "not_testable":
+                                if not item.get("error"):
+                                    raise LeanActionsError(f"سبب عدم اختبار {candidate_id} غير موثق.")
+                                strategy_not_testable += 1
+                                not_testable += 1
+                                continue
+                            if item.get("status") != "executed":
+                                raise LeanActionsError(f"حالة تركيبة {candidate_id} غير صالحة.")
+                            if item.get("candidate_id") != candidate_id or item.get("strategy_type") != strategy:
+                                raise LeanActionsError(f"هوية تركيبة {candidate_id} غير مطابقة.")
+                            if not isinstance(item.get("score_threshold"), (int, float)) or not isinstance(item.get("ai_threshold"), (int, float)):
+                                raise LeanActionsError(f"عتبات Score/AI غير موثقة في {candidate_id}.")
+                            if not isinstance(item.get("signals_count"), int):
+                                raise LeanActionsError(f"عدد قرارات {candidate_id} غير موثق.")
+                            for field in required_metric_fields:
+                                if not isinstance(item.get(field), dict):
+                                    raise LeanActionsError(f"المقياس {field} مفقود في {candidate_id}.")
+                            directional = item.get("directional")
+                            if not isinstance(directional, dict) or set(directional) != {"BUY", "SELL"}:
+                                raise LeanActionsError(f"تفصيل BUY/SELL غير مكتمل في {candidate_id}.")
+                            for direction in ("BUY", "SELL"):
+                                side = directional.get(direction) or {}
+                                for field in required_metric_fields:
+                                    if not isinstance(side.get(field), dict):
+                                        raise LeanActionsError(f"مقاييس {direction} غير مكتملة في {candidate_id}.")
+                            for split_name in ("all", "calibration", "holdout"):
+                                gross_key = f"{split_name}_gross"
+                                combined_count = int(item[gross_key].get("trades", -1))
+                                side_count = sum(
+                                    int(directional[direction][gross_key].get("trades", -1))
+                                    for direction in ("BUY", "SELL")
                                 )
-                        meta = result.get("metadata", {})
-                        report = result.get("lean_report", {})
-                        if meta.get("strategy") != strategy or report.get("strategy") != strategy:
-                            raise LeanActionsError(f"هوية استراتيجية {strategy} لا تطابق تقرير LEAN.")
-                        if meta.get("market_data_source") != common.get("market_data_source"):
-                            raise LeanActionsError(f"مصدر بيانات {strategy} لا يطابق تاريخ الفريم.")
-                        if int(meta.get("raw_bars", 0)) < 1200 or int(report.get("signals", -1)) != int(meta.get("signals_count", -2)):
-                            raise LeanActionsError(f"بيانات أو إشارات {strategy} غير مكتملة.")
-                        expected_bars = int(meta.get("bars_count", -1))
-                        if not (expected_bars == int(report.get("bars", -2)) == int(report.get("received_bars", -3))):
-                            raise LeanActionsError(f"LEAN لم يستقبل كل شموع {strategy}.")
-                        if int(report.get("reader_parsed_rows", -1)) != expected_bars or int(report.get("reader_unique_timestamps", -1)) != expected_bars:
-                            raise LeanActionsError(f"فشل التحقق من صفوف OHLC داخل LEAN لاستراتيجية {strategy}.")
-                        if report.get("order_errors"):
-                            raise LeanActionsError(f"LEAN سجّل أخطاء أوامر في {strategy}.")
-                        executed += 1
+                                if side_count != combined_count:
+                                    raise LeanActionsError(
+                                        f"عدد صفقات BUY/SELL لا يطابق الإجمالي في {candidate_id}/{split_name}."
+                                    )
+                            lean = item.get("lean_report") or {}
+                            if lean.get("strategy") != candidate_id:
+                                raise LeanActionsError(f"هوية سجل LEAN لا تطابق {candidate_id}.")
+                            if int(lean.get("signals", -1)) != int(item["signals_count"]):
+                                raise LeanActionsError(f"عدد إشارات LEAN لا يطابق {candidate_id}.")
+                            expected_bars = int(common.get("bars_count", -1))
+                            if not (
+                                expected_bars == int(lean.get("bars", -2))
+                                == int(lean.get("received_bars", -3))
+                                == int(lean.get("reader_parsed_rows", -4))
+                                == int(lean.get("reader_unique_timestamps", -5))
+                            ):
+                                raise LeanActionsError(f"لم يستقبل LEAN كامل شموع OHLC في {candidate_id}.")
+                            if lean.get("order_errors"):
+                                raise LeanActionsError(f"LEAN سجّل أخطاء أوامر في {candidate_id}.")
+                            flat_candidates[candidate_id] = item
+                            strategy_executed += 1
+                            executed += 1
+                            baseline_candidates += int(bool(item.get("is_live_baseline")))
+                        if strategy_result.get("status") == "not_testable" and strategy_executed:
+                            raise LeanActionsError(f"حالة الاستراتيجية {strategy} لا تطابق نتائج تركيباتها.")
+                        if int(strategy_result.get("executed_candidates", -1)) != strategy_executed:
+                            raise LeanActionsError(f"عدد التركيبات المنفذة غير مطابق للاستراتيجية {strategy}.")
+                        if int(strategy_result.get("not_testable_candidates", -1)) != strategy_not_testable:
+                            raise LeanActionsError(f"عدد التركيبات غير القابلة للاختبار غير مطابق للاستراتيجية {strategy}.")
+                    if executed != int(section.get("executed_candidates", -1)):
+                        raise LeanActionsError("إجمالي تركيبات LEAN المنفذة لا يطابق نتائج الاستراتيجيات.")
+                    if not_testable != int(section.get("not_testable_candidates", -1)):
+                        raise LeanActionsError("إجمالي التركيبات غير القابلة للاختبار لا يطابق النتائج.")
                     if executed == 0:
-                        raise LeanActionsError("لا توجد استراتيجية قابلة للتنفيذ والتحقق في هذا الفريم.")
+                        raise LeanActionsError("لا توجد تركيبة استراتيجية/عتبة نفذها LEAN.")
+                    if baseline_candidates not in (0, 1):
+                        raise LeanActionsError("يجب ألا يتكرر خط الأساس الحي داخل مصفوفة التركيبات.")
+
+                    def verify_selection(candidate):
+                        if candidate is None:
+                            return
+                        candidate_id = candidate.get("candidate_id")
+                        if candidate_id not in flat_candidates:
+                            raise LeanActionsError(f"المرشح المختار {candidate_id} غير موجود ضمن نتائج LEAN.")
+                    verify_selection(section.get("live_baseline"))
+                    verify_selection(section.get("calibration_selected"))
+                    for candidate in section.get("top_calibration_candidates") or []:
+                        verify_selection(candidate)
+                    for candidate in (section.get("strategy_best") or {}).values():
+                        verify_selection(candidate)
+                    for candidate in (section.get("directional_best") or {}).values():
+                        verify_selection(candidate)
                 report_text = self.format_strategy_lab_report(summary)
             elif threshold_test:
                 if summary.get("report_type") != "LEAN real historical threshold test":
