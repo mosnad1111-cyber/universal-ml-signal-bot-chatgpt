@@ -378,7 +378,7 @@ def main() -> None:
                 }
 
         if not any(item.get("status") == "ready" for item in strategy_results.values()):
-            raise RuntimeError(f"{args.ASSET} {tf}: no strategy/threshold candidate produced LEAN inputs.")
+            raise RuntimeError(f"{args.asset} {tf}: no strategy/threshold candidate produced LEAN inputs.")
         (tf_dir / "metadata.json").write_text(
             json.dumps(common, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
         )
