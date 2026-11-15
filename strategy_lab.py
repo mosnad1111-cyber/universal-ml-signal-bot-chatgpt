@@ -5,6 +5,7 @@ import pandas as pd
 from config import (
     ASSETS, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H,
     BACKTEST_RETRAIN_EVERY, GOLD_DATA_SYMBOL,
+    STRATEGY_LAB_BARS_5M, STRATEGY_LAB_BARS_15M, STRATEGY_LAB_BARS_1H,
 )
 from backtest import GoldBacktest
 
@@ -24,9 +25,9 @@ STRATEGY_NAMES = {
 # variables were set to 5,000 bars. Providers may still return fewer bars;
 # that is surfaced by the partial-history warning in the report.
 BARS_BY_TF = {
-    "5m": max(10000, BACKTEST_BARS_5M),
-    "15m": max(10000, BACKTEST_BARS_15M),
-    "1h": max(10000, BACKTEST_BARS_1H),
+    "5m": max(STRATEGY_LAB_BARS_5M, BACKTEST_BARS_5M),
+    "15m": max(STRATEGY_LAB_BARS_15M, BACKTEST_BARS_15M),
+    "1h": max(STRATEGY_LAB_BARS_1H, BACKTEST_BARS_1H),
 }
 
 
