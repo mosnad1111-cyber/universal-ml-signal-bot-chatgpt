@@ -1,6 +1,7 @@
 import time
 import threading
 import traceback
+from datetime import datetime, timezone
 import pandas as pd
 from config import *
 from market import fetch, add_features, confirmed_pivots
@@ -13,6 +14,21 @@ class Engine:
         self.send = send
         self.db = DB(DB_PATH)
         self.ai = {a['symbol']: GoldAI() for a in ASSETS.values()}
+        # Paper research uses its own model and persistent ledger; live AI/signals stay untouched.
+        self.paper_ai = GoldAI()
+        self.paper_trial_id = PAPER_TRIAL_ID
+        trial_start = self.db.get_setting('paper_trial_start_utc')
+        if not trial_start:
+            trial_start = datetime.now(timezone.utc).isoformat()
+            self.db.set_setting('paper_trial_start_utc', trial_start)
+        trial_end = self.db.get_setting('paper_trial_end_utc')
+        if not trial_end:
+            trial_end = (pd.Timestamp(trial_start) + pd.Timedelta(days=PAPER_TRIAL_DAYS)).isoformat()
+            self.db.set_setting('paper_trial_end_utc', trial_end)
+        self.paper_trial_start_utc = str(trial_start)
+        self.paper_trial_end_utc = str(trial_end)
+        self.paper_last_model = 0.0
+        self.paper_last_train_attempt = 0.0
         self.stop_event = threading.Event()
         self.last_model = 0
         self.last_train_attempt = 0
@@ -244,6 +260,295 @@ class Engine:
                     traceback.print_exc()
             time.sleep(MONITOR_SECONDS)
 
+
+    def _paper_trial_active(self, now=None):
+        now = pd.Timestamp(now or datetime.now(timezone.utc))
+        start = pd.Timestamp(self.paper_trial_start_utc)
+        end = pd.Timestamp(self.paper_trial_end_utc)
+        return start <= now < end
+
+    def _train_paper_model(self):
+        symbol = ASSETS['BTC']['symbol']
+        history = self._completed(
+            fetch(symbol, '1h', period=PAPER_MODEL_HISTORY_BARS)
+        )
+        x = self._enrich('1h', add_features(history).dropna(), symbol)
+        if len(x) < 1200:
+            raise RuntimeError(
+                f'insufficient_paper_training_bars:{len(x)}; required=1200'
+            )
+        ok = self.paper_ai.fit(
+            '1h', x, RR, divisor=DIVISOR, sl_atr_mult=SL_ATR_MULT,
+            strategy='trend_pullback',
+        )
+        if not ok:
+            raise RuntimeError(
+                self.paper_ai.errors.get('1h', 'paper_model_fit_returned_false')
+            )
+        self.paper_last_model = time.time()
+        info = self.paper_ai.metrics.get('1h', {})
+        print(
+            '[paper-trial] BTC 1h trend_pullback model trained '
+            f"rows={info.get('deployment_training_rows', info.get('training_rows', '-'))} "
+            f"history={len(history)}",
+            flush=True,
+        )
+
+    def _paper_scan(self):
+        if not self._paper_trial_active():
+            return None
+        symbol = ASSETS['BTC']['symbol']
+        if self.db.paper_open(self.paper_trial_id, symbol, '1h'):
+            return None
+        if '1h' not in self.paper_ai.models:
+            return None
+        df = fetch(symbol, '1h', period=PAPER_MODEL_HISTORY_BARS)
+        x = self._enrich('1h', add_features(df).dropna(), symbol)
+        if len(x) < 220:
+            return None
+        row = x.iloc[-2]
+        probabilities = {
+            'BUY': self.paper_ai.probability('1h', row, 'BUY'),
+            'SELL': self.paper_ai.probability('1h', row, 'SELL'),
+        }
+        diagnostics = {}
+        setup = build_setup(
+            x, probabilities, RR, DIVISOR, SL_ATR_MULT,
+            PAPER_MIN_SCORE, PAPER_MIN_AI_PROB,
+            {'trend': 0}, diagnostics=diagnostics,
+            strategy='trend_pullback',
+        )
+        if not setup:
+            return None
+        setup.update({
+            'trial_id': self.paper_trial_id,
+            'symbol': symbol,
+            'timeframe': '1h',
+            'strategy': 'trend_pullback',
+            'candle_time': setup['candle_time'],
+        })
+        source = str(df.attrs.get('market_data_source', '')).strip()
+        if source:
+            self.db.set_setting('paper_trial_data_source', source)
+        trade_id = self.db.paper_create(setup)
+        if trade_id:
+            print(
+                f"[paper-trial] CREATED id={trade_id} direction={setup['direction']} "
+                f"score={setup['score']:.1f} ai={setup['ai_prob']:.3f} "
+                f"entry={setup['entry']} sl={setup['sl']} tp={setup['tp']}",
+                flush=True,
+            )
+        return trade_id
+
+    def _paper_monitor(self):
+        symbol = ASSETS['BTC']['symbol']
+        rows = self.db.paper_all(self.paper_trial_id)
+        open_rows = [row for row in rows if row['status'] in ('WAITING', 'ACTIVE')]
+        if not open_rows:
+            return
+        df = fetch(symbol, '1h')
+        if df is None or len(df) < 2:
+            return
+        completed = df.iloc[:-1]
+        for trade in open_rows:
+            try:
+                if trade['status'] == 'WAITING':
+                    after = pd.Timestamp(trade['candle_time'])
+                    pending = df.loc[df.index > after]
+                    touched = pending[
+                        (pending['Low'] <= float(trade['entry']))
+                        & (pending['High'] >= float(trade['entry']))
+                    ]
+                    if touched.empty:
+                        continue
+                    activation_time = touched.index[0]
+                    self.db.paper_activate(trade['id'], activation_time.isoformat())
+                    if activation_time in completed.index:
+                        bar = completed.loc[activation_time]
+                        outcome = self._activation_bar_exit(
+                            trade['direction'], float(bar['High']), float(bar['Low']),
+                            float(trade['sl']), float(trade['tp']),
+                        )
+                        if outcome:
+                            price = float(trade['sl'] if outcome == 'SL' else trade['tp'])
+                            self.db.paper_close(trade['id'], outcome, price)
+                elif trade['status'] == 'ACTIVE':
+                    activation_time = trade['activation_candle_time']
+                    if not activation_time:
+                        self.db.paper_set_activation_candle(
+                            trade['id'], df.index[-1].isoformat()
+                        )
+                        continue
+                    activation_time = pd.Timestamp(activation_time)
+                    eligible = completed.loc[completed.index >= activation_time]
+                    for candle_time, bar in eligible.iterrows():
+                        outcome = (
+                            self._activation_bar_exit(
+                                trade['direction'], float(bar['High']), float(bar['Low']),
+                                float(trade['sl']), float(trade['tp']),
+                            )
+                            if candle_time == activation_time
+                            else self._bar_exit(
+                                trade['direction'], float(bar['High']), float(bar['Low']),
+                                float(trade['sl']), float(trade['tp']),
+                            )
+                        )
+                        if outcome:
+                            price = float(trade['sl'] if outcome == 'SL' else trade['tp'])
+                            self.db.paper_close(trade['id'], outcome, price)
+                            print(
+                                f"[paper-trial] CLOSED id={trade['id']} result={outcome} "
+                                f"price={price}",
+                                flush=True,
+                            )
+                            break
+            except Exception as exc:
+                print(
+                    f"[paper-trial] MONITOR_ERROR id={trade.get('id')}: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+
+    @staticmethod
+    def _paper_profit_factor(values):
+        gains = sum(max(float(value), 0.0) for value in values)
+        losses = abs(sum(min(float(value), 0.0) for value in values))
+        return gains / losses if losses else (float('inf') if gains else 0.0)
+
+    @staticmethod
+    def _paper_drawdown(values):
+        equity = peak = drawdown = 0.0
+        for value in values:
+            equity += float(value)
+            peak = max(peak, equity)
+            drawdown = max(drawdown, peak - equity)
+        return drawdown
+
+    def paper_trial_text(self):
+        rows = [dict(row) for row in self.db.paper_all(self.paper_trial_id)]
+        closed = sorted(
+            (row for row in rows if row['status'] == 'CLOSED'),
+            key=lambda row: str(row.get('closed_at') or ''),
+        )
+        gross_values = []
+        for trade in closed:
+            risk = abs(float(trade['entry']) - float(trade['sl']))
+            if risk <= 0:
+                continue
+            if trade.get('result') == 'TP':
+                realized = abs(float(trade['tp']) - float(trade['entry'])) / risk
+            elif trade.get('result') == 'SL':
+                realized = -1.0
+            elif trade.get('close_price') is not None:
+                move = (
+                    float(trade['close_price']) - float(trade['entry'])
+                    if trade['direction'] == 'BUY'
+                    else float(trade['entry']) - float(trade['close_price'])
+                )
+                realized = move / risk
+            else:
+                continue
+            gross_values.append(realized)
+        net_005 = [value - PAPER_FEE_R for value in gross_values]
+        net_010 = [value - 0.10 for value in gross_values]
+        waiting = sum(row['status'] == 'WAITING' for row in rows)
+        active = sum(row['status'] == 'ACTIVE' for row in rows)
+        wins = sum(value > 0 for value in net_005)
+        total = len(gross_values)
+        pf = self._paper_profit_factor(net_005)
+        pf_text = '∞' if pf == float('inf') else f'{pf:.2f}'
+        now = pd.Timestamp.now(tz='UTC')
+        end = pd.Timestamp(self.paper_trial_end_utc)
+        status = 'مستمرة' if now < end else 'اكتملت مدة رصد الإشارات'
+        start_text = pd.Timestamp(self.paper_trial_start_utc).strftime('%Y-%m-%d %H:%M UTC')
+        end_text = end.strftime('%Y-%m-%d %H:%M UTC')
+        source = self.db.get_setting(
+            'paper_trial_data_source',
+            'Binance Spot REST BTC/USDT historical klines',
+        )
+        lines = [
+            '🧪 <b>تقرير التجربة الورقية المستقلة — BTC/USDT 1h</b>',
+            f'الحالة: <b>{status}</b>',
+            f'الفترة: {start_text} → {end_text} ({PAPER_TRIAL_DAYS} أيام)',
+            'الاستراتيجية: trend_pullback | Score ≥ 65 | AI ≥ 60%',
+            f'مصدر OHLC: {source}',
+            '',
+            f'الإشارات/الصفقات المسجلة: {len(rows)}',
+            f'بانتظار الدخول: {waiting} | مفعّلة: {active} | مغلقة: {len(closed)}',
+            f'الصفقات المحسومة المستخدمة في القياس: {total}',
+            f'Win Rate بعد تكلفة 0.05R: {(100.0 * wins / total) if total else 0.0:.1f}%',
+            f'Gross: {sum(gross_values):+.2f}R',
+            f'Net بعد تكلفة 0.05R/صفقة: {sum(net_005):+.2f}R',
+            f'Net عند حساسية 0.10R/صفقة: {sum(net_010):+.2f}R',
+            f'Profit Factor بعد 0.05R: {pf_text}',
+            f'Max Drawdown بعد 0.05R: {self._paper_drawdown(net_005):.2f}R',
+            '',
+            '⚠️ هذه محاكاة ورقية داخل البوت باستخدام OHLC؛ لا ترسل أوامر إلى وسيط ولا تستخدم حساب Paper خارجي.',
+            '⚠️ تكلفة 0.05R و0.10R افتراض حساسية وليست سبريد/عمولة وسيط مؤكدة.',
+            'ℹ️ لا تتغير عتبات الإشارات الحية أو سجلها؛ سجل التجربة منفصل تماماً.',
+        ]
+        return '\n'.join(lines)
+
+    def _paper_maybe_send_report(self):
+        now = pd.Timestamp.now(tz='UTC')
+        end = pd.Timestamp(self.paper_trial_end_utc)
+        if now < end or self.db.get_setting('paper_trial_report_sent') == '1':
+            return
+        try:
+            if self.send(self.paper_trial_text()):
+                self.db.set_setting('paper_trial_report_sent', '1')
+                print('[paper-trial] Seven-day summary sent to Telegram.', flush=True)
+        except Exception as exc:
+            print(f'[paper-trial] REPORT_ERROR: {type(exc).__name__}: {exc}', flush=True)
+
+    def paper_scanner(self):
+        symbol = ASSETS['BTC']['symbol']
+        print(
+            f"[paper-trial] Scheduled BTC 1h trend_pullback paper trial "
+            f"from {self.paper_trial_start_utc} to {self.paper_trial_end_utc}; "
+            f"history={PAPER_MODEL_HISTORY_BARS} bars",
+            flush=True,
+        )
+        while not self.stop_event.is_set():
+            now = pd.Timestamp.now(tz='UTC')
+            start = pd.Timestamp(self.paper_trial_start_utc)
+            end = pd.Timestamp(self.paper_trial_end_utc)
+            if start <= now < end:
+                epoch = time.time()
+                refresh_due = epoch - self.paper_last_model >= MODEL_REFRESH_HOURS * 3600
+                retry_ready = epoch - self.paper_last_train_attempt >= 300
+                if ('1h' not in self.paper_ai.models or refresh_due) and retry_ready:
+                    self.paper_last_train_attempt = epoch
+                    try:
+                        self._train_paper_model()
+                        self.db.set_setting('paper_trial_model_last_error', '')
+                    except Exception as exc:
+                        self.db.set_setting(
+                            'paper_trial_model_last_error',
+                            f'{type(exc).__name__}: {exc}',
+                        )
+                        print(
+                            f'[paper-trial] MODEL_TRAIN_ERROR: {type(exc).__name__}: {exc}',
+                            flush=True,
+                        )
+                if '1h' in self.paper_ai.models:
+                    try:
+                        self._paper_scan()
+                    except Exception as exc:
+                        print(
+                            f'[paper-trial] SCAN_ERROR: {type(exc).__name__}: {exc}',
+                            flush=True,
+                        )
+            try:
+                self._paper_monitor()
+                self._paper_maybe_send_report()
+            except Exception as exc:
+                print(
+                    f'[paper-trial] LOOP_ERROR: {type(exc).__name__}: {exc}',
+                    flush=True,
+                )
+            self.stop_event.wait(SCAN_SECONDS)
+
     def scanner(self):
         if self.stop_event.wait(15): return
         while not self.stop_event.is_set():
@@ -424,5 +729,10 @@ class Engine:
         threading.Thread(
             target=self.monitor,
             name="trade-monitor",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self.paper_scanner,
+            name="btc-paper-trial",
             daemon=True,
         ).start()
