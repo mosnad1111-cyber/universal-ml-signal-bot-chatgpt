@@ -279,51 +279,72 @@ class LeanActionsClient:
         if not metric or not int(metric.get("trades", 0)):
             return "0 صفقة محسومة"
         pf = metric.get("profit_factor", 0.0)
-        if pf in ("Infinity", "inf", "∞") or (isinstance(pf, (int, float)) and math.isinf(float(pf))):
+        if pf in ("Infinity", "inf", "∞") or (
+            isinstance(pf, (int, float)) and math.isinf(float(pf))
+        ):
             pf_text = "∞"
         elif pf is None:
             pf_text = "—"
         else:
             pf_text = f"{float(pf):.2f}"
+        net_r = metric.get("net_after_cost_r", metric.get("net_r", 0.0))
         return (
             f"{int(metric.get('trades', 0))} صفقة | "
-            f"فوز {float(metric.get('win_rate', 0.0)):.1f}% | "
-            f"Gross {float(metric.get('net_r', 0.0)):+.2f}R | "
-            f"PF {pf_text} | "
+            f"WR {float(metric.get('win_rate', 0.0)):.1f}% | "
+            f"Net {float(net_r):+.2f}R | PF {pf_text} | "
             f"DD {float(metric.get('max_drawdown_r', 0.0)):.2f}R"
         )
 
     @classmethod
-    def _format_lab_directional(cls, direction: str, metric: dict[str, Any]) -> str:
-        calibration = metric.get("calibration", {})
-        holdout = metric.get("holdout", {})
-        cost_005 = metric.get("holdout_cost_005R", {})
-        cost_010 = metric.get("holdout_cost_010R", {})
-        label = "BUY شراء" if direction == "BUY" else "SELL بيع"
-        return (
-            f"  {label} | المعايرة: {cls._format_lab_metric(calibration)} | "
-            f"Holdout: {cls._format_lab_metric(holdout)} | "
-            f"صافي Holdout بعد التكلفة: "
-            f"{float(cost_005.get('net_after_cost_r', 0.0)):+.2f}R عند 0.05R؛ "
-            f"{float(cost_010.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R"
-        )
+    def _format_lab_candidate(cls, candidate: dict[str, Any], include_sides: bool = True) -> list[str]:
+        strategy = html.escape(str(candidate.get("strategy_name", candidate.get("strategy_type", "—"))))
+        score = float(candidate.get("score_threshold", 0.0))
+        ai = float(candidate.get("ai_threshold", 0.0)) * 100
+        calibration = candidate.get("calibration_net", {})
+        holdout = candidate.get("holdout_net", {})
+        cost_005 = candidate.get("holdout_cost_005R", {})
+        cost_010 = candidate.get("holdout_cost_010R", {})
+        lines = [
+            f"  <b>{strategy}</b> | Score ≥ {score:g} | AI ≥ {ai:.0f}%",
+            f"    Calibration: {cls._format_lab_metric(calibration)}",
+            f"    Holdout: {cls._format_lab_metric(holdout)}",
+            f"    حساسية Holdout: {float(cost_005.get('net_after_cost_r', 0.0)):+.2f}R عند 0.05R؛ "
+            f"{float(cost_010.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R",
+        ]
+        if include_sides:
+            directional = candidate.get("directional", {})
+            for direction, label in (("BUY", "BUY شراء"), ("SELL", "SELL بيع")):
+                side = directional.get(direction, {})
+                side_cal = side.get("calibration_net", {})
+                side_hold = side.get("holdout_net", {})
+                side_005 = side.get("holdout_cost_005R", {})
+                side_010 = side.get("holdout_cost_010R", {})
+                lines.append(
+                    f"    {label}: Cal {cls._format_lab_metric(side_cal)} | "
+                    f"Holdout {cls._format_lab_metric(side_hold)} | "
+                    f"تكلفة 0.05/0.10R: "
+                    f"{float(side_005.get('net_after_cost_r', 0.0)):+.2f}/"
+                    f"{float(side_010.get('net_after_cost_r', 0.0)):+.2f}R"
+                )
+        return lines
 
     @classmethod
     def format_strategy_lab_report(cls, summary: dict[str, Any]) -> str:
         asset_labels = {"GOLD": "الذهب XAU/USD", "BTC": "البيتكوين BTC/USDT"}
-        names = summary.get("strategy_names") or LAB_STRATEGY_NAMES
         lines = [
-            "🧭 <b>مختبر الاستراتيجيات — تنفيذ LEAN تاريخي حقيقي</b>",
+            "🧭 <b>المختبر الموحد — الاستراتيجيات × عتبات Score/AI</b>",
             f"الأصل: <b>{html.escape(asset_labels.get(summary.get('asset_key', ''), str(summary.get('asset_key', ''))))}</b>",
             f"المحرك: <b>{html.escape(str(summary.get('engine', 'QuantConnect LEAN')))}</b>",
-            "كل استراتيجية لها Walk-Forward مستقل؛ Python يجهّز قرارات الدخول فقط، وLEAN ينفّذ الصفقات ويحدد نتائجها.",
-            "المعايرة والاحتجاز محسوبتان من سجل صفقات LEAN؛ الصفقات العابرة لنقطة الفصل لا تدخل في أي مجموعة.",
+            "كل استراتيجية تستخدم Walk-Forward خاصًا بها؛ شبكة العتبات تُطبّق على التوقعات نفسها داخل الاستراتيجية والفريم.",
+            "كل تركيبة استراتيجية/عتبة تُنفّذ بصورة مستقلة داخل LEAN؛ Python لا يحسم الصفقات.",
+            "الترتيب والاختيار من Calibration فقط؛ Holdout مستقل ولا يدخل في اختيار المرشحين.",
             "",
         ]
         for section in summary.get("timeframes", []):
             common = section.get("metadata", {})
             tf = html.escape(str(common.get("timeframe", "?")))
             source = html.escape(str(common.get("market_data_source", "غير معروف")))
+            active = common.get("active_thresholds", {})
             lines.extend([
                 f"⏱️ <b>{tf}</b>",
                 f"المصدر: {source}",
@@ -332,60 +353,77 @@ class LeanActionsClient:
                 f"{int(common.get('usable_bars', 0)):,} مستخدمة",
                 f"الفترة UTC: {html.escape(str(common.get('snapshot_start', '—')))} → "
                 f"{html.escape(str(common.get('snapshot_end', '—')))}",
-                f"نقطة الفصل: {html.escape(str(common.get('midpoint', '—')))}",
-                f"رصيد LEAN الفني: ${float(common.get('lean_initial_cash_usd', 100000.0)):,.0f} لتغطية وحدة واحدة "
-                f"مع هامش {float(common.get('lean_cash_buffer_multiplier', 1.5)) * 100 - 100:.0f}%؛ "
-                "كمية كل دخول/خروج ثابتة عند وحدة واحدة.",
+                f"العتبات الحية الحالية: Score ≥ {float(active.get('score', 0.0)):g} | "
+                f"AI ≥ {float(active.get('ai', 0.0))*100:.0f}%",
+                f"شبكة العتبات: {len(section.get('scores', []))} Scores × "
+                f"{len(section.get('ai_probabilities', []))} AI = "
+                f"{int(section.get('candidate_count_per_strategy', 0))} تركيبة لكل استراتيجية",
+                f"تنفيذ LEAN: {int(section.get('executed_candidates', 0))}/"
+                f"{int(section.get('expected_candidates', 0))} | "
+                f"غير قابلة للاختبار: {int(section.get('not_testable_candidates', 0))}",
             ])
             if common.get("history_partial"):
                 lines.append("⚠️ التاريخ المتاح أقل من العدد المطلوب.")
             if common.get("volume_note"):
                 lines.append(f"ملاحظة الحجم: {html.escape(str(common['volume_note']))}")
+
+            baseline = section.get("live_baseline")
+            if baseline:
+                lines.append("🟦 <b>خط الأساس الحي — الاستراتيجية الحالية مع العتبات الحالية</b>")
+                lines.extend(cls._format_lab_candidate(baseline))
+
+            selected = section.get("calibration_selected")
+            if selected:
+                lines.append("🏆 <b>أفضل تركيبة مشتركة حسب Calibration فقط</b>")
+                lines.extend(cls._format_lab_candidate(selected))
+            else:
+                lines.append(
+                    "⚪ لا توجد تركيبة اجتازت شروط المعايرة: 30 صفقة مكتملة على الأقل، "
+                    "Net موجب، وPF أكبر من 1."
+                )
+
+            lines.append("📊 <b>أفضل تركيبة مؤهلة من كل استراتيجية</b>")
+            strategy_best = section.get("strategy_best", {})
+            results = section.get("results", {})
             for strategy in LAB_STRATEGIES:
-                result = section.get("results", {}).get(strategy, {})
-                label = html.escape(str(names.get(strategy, LAB_STRATEGY_NAMES[strategy])))
-                lines.append(f"<b>{label}</b>")
-                if result.get("status") == "not_testable":
-                    lines.append("  ⚪ لم يصل النموذج إلى عينة Walk-Forward قابلة للاختبار داخل LEAN.")
-                    lines.append(f"  السبب: {html.escape(str(result.get('error', 'غير محدد'))[:240])}")
-                    continue
-                if result.get("status") != "executed":
-                    lines.append("  ❌ نتيجة الاستراتيجية غير متاحة أو لم يتم التحقق منها.")
-                    continue
-                lines.append("  المعايرة: " + cls._format_lab_metric(result.get("calibration", {})))
-                lines.append("  الاحتجازي: " + cls._format_lab_metric(result.get("holdout", {})))
-                c05 = result.get("holdout_cost_005R", {})
-                c10 = result.get("holdout_cost_010R", {})
-                lines.append(
-                    f"  صافي الاحتجاز بعد التكلفة: {float(c05.get('net_after_cost_r', 0.0)):+.2f}R "
-                    f"عند 0.05R/صفقة؛ {float(c10.get('net_after_cost_r', 0.0)):+.2f}R عند 0.10R/صفقة"
-                )
-                directional = result.get("directional", {})
-                for direction in ("BUY", "SELL"):
-                    lines.append(cls._format_lab_directional(
-                        direction, directional.get(direction, {})
-                    ))
-                report = result.get("lean_report", {})
-                lines.append(
-                    f"  قرارات الاستراتيجية: {int(result.get('signals_count', 0))} | "
-                    f"صفقات LEAN المنفذة: {int(report.get('trades', 0))} | "
-                    f"غير مفعّلة: {int(result.get('unfilled_setups', 0))} | "
-                    f"غير محسومة: {int(result.get('unresolved_trades', 0))}"
-                )
-                fit = result.get("model_fit_diagnostics", {})
-                if fit.get("fit_failures") or fit.get("model_unavailable_candles"):
-                    lines.append(
-                        f"  التدريب: {int(fit.get('fit_attempts', 0))} محاولة، "
-                        f"{int(fit.get('fit_failures', 0))} فشل إعادة تدريب، "
-                        f"{int(fit.get('model_unavailable_candles', 0))} شمعة بلا نموذج"
-                    )
-                if int(result.get("holdout", {}).get("trades", 0)) < 30:
-                    lines.append("  ⚠️ أقل من 30 صفقة في الاحتجاز؛ العينة ضعيفة للحكم.")
+                strategy_result = results.get(strategy, {})
+                ready = int(strategy_result.get("executed_candidates", 0))
+                unavailable = int(strategy_result.get("not_testable_candidates", 0))
+                best = strategy_best.get(strategy)
+                name = html.escape(LAB_STRATEGY_NAMES.get(strategy, strategy))
+                lines.append(f"  {name}: نفّذ {ready} تركيبة؛ غير قابلة للاختبار {unavailable}")
+                if best:
+                    lines.extend(cls._format_lab_candidate(best, include_sides=False)[0:3])
+                else:
+                    fit = strategy_result.get("model_fit_diagnostics", {})
+                    if strategy_result.get("error"):
+                        lines.append(f"    لا يوجد مرشح مؤهل: {html.escape(str(strategy_result['error'])[:160])}")
+                    elif fit.get("fit_failures"):
+                        lines.append(f"    فشل إعادة التدريب: {int(fit.get('fit_failures', 0))}")
+
+            lines.append("🧭 <b>أفضل تركيبة لكل اتجاه — تشخيص مستقل من Calibration</b>")
+            directional_best = section.get("directional_best", {})
+            for direction, label in (("BUY", "BUY شراء"), ("SELL", "SELL بيع")):
+                candidate = directional_best.get(direction)
+                if candidate:
+                    lines.extend([f"  {label}:"] + cls._format_lab_candidate(candidate, include_sides=True))
+                else:
+                    lines.append(f"  {label}: لا توجد تركيبة مؤهلة بعينة 30 صفقة وNet موجب وPF أكبر من 1.")
+
+            top = section.get("top_calibration_candidates") or []
+            if top:
+                lines.append("📋 <b>أفضل خمس تركيبات إجمالًا حسب Calibration</b>")
+                for index, candidate in enumerate(top, 1):
+                    lines.append(f"  #{index}")
+                    lines.extend(cls._format_lab_candidate(candidate, include_sides=False))
             lines.append("")
+
         lines.extend([
-            "تكلفة LEAN الأساسية افتراض 0.05R لكل صفقة مغلقة؛ حساسية 0.10R سيناريو إضافي وليست بيانات سبريد أو عمولات وسيط فعلية.",
-            "المختبر لا يفعّل استراتيجية تلقائيًا. يلزم احتجاز موجب بعد التكلفة، PF مناسب، تراجع مقبول، وعدد صفقات كافٍ، ثم فترة مستقبلية مستقلة قبل التداول.",
-            "هذا بحث تاريخي وليس ضمانًا للأرباح أو توصية تداول.",
+            "Net الأساسي مأخوذ من سجل LEAN وتكلفة LEAN المفترضة 0.05R لكل صفقة مغلقة. "
+            "حساسية 0.05R و0.10R للـHoldout سيناريوهات تكلفة وليست تسعيرًا فعليًا لوسيط.",
+            "اختيار BUY أو SELL بشكل منفصل تشخيصي فقط؛ المرشح المشترك يُرتّب على نتيجة الاتجاهين معًا.",
+            "لا يتم تغيير عتبات أو استراتيجيات التداول الحية تلقائيًا. يلزم اختبار المرشح على فترة مستقبلية مستقلة وPaper Trading قبل اعتماده.",
+            "هذا بحث تاريخي ببيانات فعلية وليس ضمانًا للربح أو تنفيذًا لدى وسيطك.",
         ])
         return "\n".join(lines)
 
