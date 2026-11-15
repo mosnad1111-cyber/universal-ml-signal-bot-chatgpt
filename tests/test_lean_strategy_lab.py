@@ -14,6 +14,7 @@ from scripts.prepare_lean_strategy_lab import (
     _write_candidate,
     threshold_axes,
     threshold_id,
+    TIMEFRAME_BARS,
 )
 from scripts.summarize_lean_strategy_lab import (
     _candidate_metrics,
@@ -36,6 +37,9 @@ class LeanStrategyLabTests(unittest.TestCase):
             "Close": [100.5, 101.5, 102.5],
             "Volume": [0.0, 0.0, 0.0],
         }, index=self.index)
+
+    def test_strategy_lab_history_target_is_20000_bars_per_timeframe(self):
+        self.assertEqual(TIMEFRAME_BARS, {"5m": 20000, "15m": 20000, "1h": 20000})
 
     def test_summarizer_cli_imports_project_module_outside_repo_cwd(self):
         script = Path(__file__).resolve().parents[1] / "scripts" / "summarize_lean_strategy_lab.py"
