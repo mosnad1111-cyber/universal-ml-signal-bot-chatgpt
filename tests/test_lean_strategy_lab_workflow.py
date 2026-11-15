@@ -6,41 +6,46 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class LeanStrategyLabWorkflowTests(unittest.TestCase):
-    def test_telegram_lab_button_dispatches_to_lean_instead_of_python_trade_simulator(self):
+    def test_only_unified_lab_option_is_exposed_in_telegram(self):
         telegram = (ROOT / "telegram_ar.py").read_text(encoding="utf-8")
         self.assertIn("dispatch_strategy_lab", telegram)
         self.assertIn("'mode': 'strategy_lab'", telegram)
+        self.assertIn("المختبر الموحد للاستراتيجيات والعتبات", telegram)
+        self.assertNotIn("thresholds:GOLD", telegram)
+        self.assertNotIn("thresholds:BTC", telegram)
+        self.assertNotIn("def _grid_search", telegram)
         self.assertNotIn("StrategyResearchLab", telegram)
 
-    def test_decision_preparation_is_separate_from_trade_resolution(self):
-        backtest = (ROOT / "backtest.py").read_text(encoding="utf-8")
-        self.assertIn("decision_only=False", backtest)
-        self.assertIn("if decision_only:", backtest)
-        self.assertLess(backtest.index("if decision_only:"), backtest.index("self._resolve(raw, start, setup)"))
-        self.assertIn("lean_events.append", backtest)
-
+    def test_strategy_walk_forward_stream_is_reused_for_each_threshold_pair(self):
         preparation = (ROOT / "scripts/prepare_lean_strategy_lab.py").read_text(encoding="utf-8")
         self.assertIn("decision_only=True", preparation)
         self.assertIn("market_data_type", preparation)
         self.assertIn("signals_aligned_to_ohlc", preparation)
+        self.assertIn("threshold_axes(tf)", preparation)
+        self.assertIn("backtest._walk_forward_predictions", preparation)
+        self.assertIn("_predictions=predictions", preparation)
+        self.assertIn("min_score_override=score", preparation)
+        self.assertIn("min_ai_override=ai", preparation)
+        self.assertIn("strategy=strategy", preparation)
 
-    def test_workflow_replays_each_strategy_through_official_lean_engine(self):
+    def test_workflow_executes_every_strategy_threshold_pair_in_official_lean(self):
         workflow = (ROOT / ".github/workflows/lean-strategy-lab.yml").read_text(encoding="utf-8")
         self.assertIn("quantconnect/lean:latest", workflow)
-        self.assertIn("Execute every eligible strategy inside LEAN", workflow)
+        self.assertIn("Execute every strategy-threshold candidate inside LEAN", workflow)
         self.assertIn("trend_pullback", workflow)
         self.assertIn("breakout_retest", workflow)
         self.assertIn("momentum_continuation", workflow)
         self.assertIn("prepare_lean_strategy_lab.py", workflow)
         self.assertIn("summarize_lean_strategy_lab.py", workflow)
-        preparation = (ROOT / "scripts/prepare_lean_strategy_lab.py").read_text(encoding="utf-8")
-        self.assertIn("_lean_capital_requirements(raw)", preparation)
-        self.assertIn('"lean_initial_cash_usd"', preparation)
+        self.assertIn("strategies/$strategy/candidates", workflow)
+        self.assertIn("results/$tf/$strategy/$candidate_id", workflow)
+        self.assertIn("lean_runtime/LeanBacktestAlgorithm.py", workflow)
         self.assertIn("lean-strategy-lab-" + "$" + "{{ inputs.request_id }}", workflow)
         self.assertNotIn("create_lean_fixture.py", workflow)
+        self.assertFalse((ROOT / ".github/workflows/lean-threshold-test.yml").exists())
 
-    def test_lean_report_records_the_strategy_that_was_executed(self):
-        algorithm = (ROOT / "lean_smoke/LeanBacktestAlgorithm.py").read_text(encoding="utf-8")
+    def test_lean_report_records_candidate_identity_and_fixed_unit_execution(self):
+        algorithm = (ROOT / "lean_runtime/LeanBacktestAlgorithm.py").read_text(encoding="utf-8")
         self.assertIn('"strategy": self.metadata.get("strategy", "baseline")', algorithm)
         self.assertIn('self.set_cash(self.initial_cash_usd)', algorithm)
         self.assertIn('max_ohlc_price = float(self.metadata.get("max_ohlc_price", 0.0) or 0.0)', algorithm)

@@ -57,7 +57,6 @@ class Telegram:
             [{'text':'📊 إحصائيات الأداء','callback_data':'stats'}, {'text':'📋 الإشارات الأخيرة','callback_data':'recent'}],
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'⚙️ LEAN تاريخي حقيقي — الذهب','callback_data':'lean_menu:GOLD'}, {'text':'⚙️ LEAN تاريخي حقيقي — BTC','callback_data':'lean_menu:BTC'}],
-            [{'text':'🔬 اختبار العتبات — الذهب','callback_data':'thresholds:GOLD'}, {'text':'🔬 اختبار العتبات — BTC','callback_data':'thresholds:BTC'}],
             [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
@@ -196,54 +195,6 @@ class Telegram:
         threading.Thread(target=work,daemon=True).start()
 
 
-    def _grid_search(self, cid, asset_key='GOLD'):
-        """Dispatch threshold-only candidates through the same real-history LEAN pipeline."""
-        if not self.db:
-            self.send('❌ تخزين طلب اختبار العتبات غير متاح في هذه الخدمة.', cid)
-            return
-        if self.backtest_running or self.db.get_setting('lean_active_request'):
-            self.send('⏳ يوجد اختبار LEAN آخر قيد التشغيل. انتظر التقرير قبل بدء اختبار عتبات جديد.', cid)
-            return
-        if asset_key not in ASSETS:
-            self.send('❌ الأصل المحدد غير مدعوم.', cid)
-            return
-
-        timeframes = ['5m', '15m', '1h']
-        request_id = uuid.uuid4().hex
-        asset = ASSETS[asset_key]
-        record = {
-            'request_id': request_id,
-            'chat_id': str(cid),
-            'asset_key': asset_key,
-            'timeframes': timeframes,
-            'mode': 'threshold_test',
-            'status': 'queued',
-            'created_at': datetime.now(timezone.utc).isoformat(),
-        }
-        try:
-            self.lean_client.validate_request(asset_key, timeframes)
-            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
-            self.db.set_setting('lean_active_request', request_id)
-            self.backtest_running = True
-            self.send(
-                f'🚀 <b>بدأ اختبار العتبات على LEAN — {asset["label"]}</b>\n\n'
-                'سيُستخدم تاريخ OHLC فعلي على 5m و15m و1h، مع توقعات XGBoost Walk-Forward واحدة لكل فريم.\n'
-                'سيتم اختبار تركيبات Score وAI، بما فيها العتبات الحية الحالية كخط أساس. كل تركيبة تُنفّذ منفصلة داخل LEAN لحساب الدخول والخروج والرسوم.\n'
-                'المعايرة تختار المرشح؛ وHoldout يبقى اختبارًا مستقلًا لاختيار الأداء خارج العينة. لا تتغير إشارات التداول الحية أو عتباتها تلقائيًا.',
-                cid,
-            )
-            self.lean_client.dispatch_threshold_test(request_id, asset_key, timeframes)
-            record['status'] = 'dispatched'
-            self.db.set_setting(f'lean_request:{request_id}', json.dumps(record, ensure_ascii=False))
-        except Exception as exc:
-            self.backtest_running = False
-            self.db.set_setting(
-                f'lean_request:{request_id}',
-                json.dumps({**record, 'status': 'dispatch_failed'}, ensure_ascii=False),
-            )
-            self.db.set_setting('lean_active_request', '')
-            self.send('❌ <b>تعذر تشغيل اختبار العتبات على LEAN.</b>\n' + str(exc), cid)
-
     def _strategy_lab(self, cid, asset_key='GOLD'):
         if not self.db:
             self.send('❌ تخزين طلب مختبر LEAN غير متاح في هذه الخدمة.', cid)
@@ -272,10 +223,11 @@ class Telegram:
             self.db.set_setting('lean_active_request', request_id)
             self.backtest_running = True
             self.send(
-                f'🚀 <b>تم إرسال مختبر الاستراتيجيات إلى LEAN — {asset["label"]}</b>\n\n'
-                'سيختبر أربع استراتيجيات مستقلة على 5m و15m و1h باستخدام بيانات السوق التاريخية الفعلية.\n'
-                'كل استراتيجية تحصل على قرارات Walk-Forward خاصة بها، ثم ينفّذ LEAN الصفقات ويحسب سجل النتائج.\n'
-                'سيصل تقرير المعايرة والاحتجاز وحساسية التكلفة هنا عند اكتماله. لا تتغير إشارات التداول الحية.',
+                f'🚀 <b>تم إرسال المختبر الموحد للاستراتيجيات والعتبات إلى LEAN — {asset["label"]}</b>\n\n'
+                'سيختبر أربع استراتيجيات، ولكل استراتيجية شبكة عتبات Score/AI كاملة على 5m و15m و1h.\n'
+                'كل استراتيجية لها Walk-Forward مستقل واحد لكل فريم، وتُنفّذ كل تركيبة عتبات داخل LEAN باستخدام OHLC التاريخي نفسه.\n'
+                'سيعرض التقرير أفضل استراتيجية مع أفضل عتبة، ونتائج BUY وSELL، مع فصل Calibration عن Holdout.\n'
+                'هذا اختبار بحثي فقط؛ لا تتغير إشارات التداول الحية أو عتباتها تلقائيًا.',
                 cid,
             )
             self.lean_client.dispatch_strategy_lab(request_id, asset_key, timeframes)
@@ -325,9 +277,6 @@ class Telegram:
                         elif data=='backtest' or data.startswith('backtest:'):
                             asset_key=data.split(':',1)[1] if ':' in data else 'GOLD'
                             self._backtest(cid,asset_key)
-                        elif data=='grid': self._grid_search(cid, 'GOLD')
-                        elif data.startswith('thresholds:'):
-                            self._grid_search(cid, data.split(':', 1)[1].upper())
                         elif data.startswith('lean_menu:'):
                             self._lean_menu(cid, data.split(':',1)[1].upper())
                         elif data.startswith('lean:'):

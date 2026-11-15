@@ -1,7 +1,9 @@
-"""Prepare decision-only strategy hypotheses for independent LEAN execution.
+"""Prepare every strategy x Score/AI candidate for independent LEAN execution.
 
-XGBoost walk-forward predictions and setup decisions are generated chronologically
-per strategy. Python does not resolve trades; LEAN owns every fill and exit.
+Each strategy owns one chronological Walk-Forward prediction stream per asset
+and timeframe. The full threshold grid is applied to that stream without
+retraining; every accepted decision set is independently replayed by LEAN.
+Python never resolves fills, exits, or trade outcomes.
 """
 from __future__ import annotations
 
@@ -22,6 +24,9 @@ from config import (
     BACKTEST_BARS_15M,
     BACKTEST_BARS_1H,
     BACKTEST_RETRAIN_EVERY,
+    GRID_AI_PROBS,
+    GRID_SCORES,
+    thresholds_for,
 )
 from strategy_lab import STRATEGIES, STRATEGY_NAMES
 
@@ -45,13 +50,20 @@ def _utc_iso(value) -> str:
     return _utc_timestamp(value).isoformat()
 
 
-def _lean_capital_requirements(raw: pd.DataFrame) -> tuple[float, float]:
-    """Size LEAN's cash buffer for one fixed unit at the highest historical OHLC price.
+def threshold_id(score: float, ai: float) -> str:
+    return f"score_{int(round(float(score))):03d}_ai_{int(round(float(ai) * 100)):03d}"
 
-    Strategy execution remains one unit per entry. The account cash is only the
-    buying-power envelope required to let LEAN validate that unit at every
-    historical price, with 50% headroom; it does not change signal size.
-    """
+
+def threshold_axes(timeframe: str) -> tuple[list[float], list[float], float, float]:
+    """Return the full configured grid plus this timeframe's live threshold pair."""
+    live_score, live_ai = thresholds_for(timeframe)
+    scores = sorted(set(float(value) for value in GRID_SCORES) | {float(live_score)})
+    ai_values = sorted(set(float(value) for value in GRID_AI_PROBS) | {float(live_ai)})
+    return scores, ai_values, float(live_score), float(live_ai)
+
+
+def _lean_capital_requirements(raw: pd.DataFrame) -> tuple[float, float]:
+    """Size LEAN cash for one fixed unit at the highest observed OHLC price."""
     if raw.empty:
         raise RuntimeError("Cannot size LEAN buying power from empty OHLC history.")
     columns = ("Open", "High", "Low", "Close")
@@ -99,11 +111,15 @@ def _write_bars(tf_dir: Path, raw: pd.DataFrame) -> tuple[int, dict[str, int]]:
     return len(serialized), dict(sorted(daily.items()))
 
 
-def _write_strategy(
+def _write_candidate(
     tf_dir: Path,
     strategy: str,
     result: dict,
     common: dict,
+    score: float,
+    ai: float,
+    live_score: float,
+    live_ai: float,
 ) -> dict:
     if result.get("decision_only") is not True:
         raise RuntimeError(f"{tf_dir.name}/{strategy}: Python trade resolution was not disabled.")
@@ -113,8 +129,7 @@ def _write_strategy(
 
     bar_times = set()
     with (tf_dir / "bars.csv").open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            bar_times.add(row["time"])
+        bar_times = {row["time"] for row in csv.DictReader(handle)}
     signal_times = [
         _utc_timestamp(event["signal_time"]).strftime("%Y-%m-%d %H:%M:%S.%f")
         for event in signals
@@ -125,15 +140,28 @@ def _write_strategy(
             f"{tf_dir.name}/{strategy}: decision timestamps do not match original OHLC: {missing[:5]}"
         )
     if signal_times != sorted(signal_times) or len(signal_times) != len(set(signal_times)):
-        raise RuntimeError(f"{tf_dir.name}/{strategy}: strategy decision timestamps are not unique and ordered.")
+        raise RuntimeError(f"{tf_dir.name}/{strategy}: decisions are not unique and ordered.")
 
-    strategy_dir = tf_dir / "strategies" / strategy
-    strategy_dir.mkdir(parents=True, exist_ok=True)
+    candidate = threshold_id(score, ai)
+    candidate_key = f"{strategy}__{candidate}"
+    candidate_dir = tf_dir / "strategies" / strategy / "candidates" / candidate
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    is_live_pair = (
+        abs(float(score) - float(live_score)) < 1e-9
+        and abs(float(ai) - float(live_ai)) < 1e-9
+    )
     metadata = {
         **common,
-        "strategy": strategy,
-        "strategy_label": STRATEGY_NAMES[strategy],
-        "fee_r": 0.05,
+        "strategy": candidate_key,
+        "strategy_type": strategy,
+        "strategy_name": STRATEGY_NAMES[strategy],
+        "candidate_id": candidate_key,
+        "threshold_id": candidate,
+        "strategy_label": f"{STRATEGY_NAMES[strategy]} | Score ≥ {score:g} | AI ≥ {ai * 100:.0f}%",
+        "score_threshold": float(score),
+        "ai_threshold": float(ai),
+        "is_live_threshold_pair": bool(is_live_pair),
+        "is_live_baseline": bool(strategy == "baseline" and is_live_pair),
         "signals_count": len(signals),
         "signals_aligned_to_ohlc": True,
         "decision_only": True,
@@ -142,15 +170,19 @@ def _write_strategy(
         "rejection_counts": result.get("rejection_counts", {}),
         "direction_rejections": result.get("direction_rejections", {}),
     }
-    (strategy_dir / "metadata.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
+    (candidate_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
     )
-    (strategy_dir / "signals.json").write_text(
+    (candidate_dir / "signals.json").write_text(
         json.dumps(signals, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
         encoding="utf-8",
     )
-    return {"status": "ready", "metadata": metadata}
+    return {
+        "status": "ready",
+        "candidate_id": candidate_key,
+        "threshold_id": candidate,
+        "metadata": metadata,
+    }
 
 
 def main() -> None:
@@ -198,6 +230,12 @@ def main() -> None:
         if not source or "synthetic" in source.lower():
             raise RuntimeError(f"{args.asset} {tf}: historical provider is not identified as real data.")
         max_ohlc_price, lean_initial_cash_usd = _lean_capital_requirements(raw)
+        scores, ai_values, live_score, live_ai = threshold_axes(tf)
+        threshold_candidates = [
+            (score, ai, threshold_id(score, ai))
+            for score in scores
+            for ai in ai_values
+        ]
 
         common = {
             "request_id": args.request_id,
@@ -229,54 +267,153 @@ def main() -> None:
             "market_data_source": source,
             "market_data_type": "real_historical_ohlc",
             "signals_aligned_to_ohlc": True,
+            "active_thresholds": {"score": live_score, "ai": live_ai},
+            "score_thresholds": scores,
+            "ai_thresholds": ai_values,
+            "threshold_count_per_strategy": len(threshold_candidates),
+            "candidate_count_expected": len(STRATEGIES) * len(threshold_candidates),
             "volume_note": (
                 "Gold volume is a neutral proxy and is not real traded volume."
                 if args.asset == "GOLD"
                 else str(prepared.get("market_data_warning") or "Provider volume is reported as supplied.")
             ),
         }
-        results = {}
+
+        strategy_results = {}
         for strategy in STRATEGIES:
-            print(f"[strategy-lab] {args.asset} {tf} {strategy}: walk-forward decisions", flush=True)
-            result = backtest.run(
-                tf,
-                bars=requested,
-                retrain_every=BACKTEST_RETRAIN_EVERY,
-                _prepared=prepared,
-                symbol=asset["symbol"],
-                strategy=strategy,
-                include_lean_payload=True,
-                decision_only=True,
-                end_before=cutoff,
-            )
-            if result.get("error"):
-                results[strategy] = {
-                    "status": "not_testable",
-                    "error": str(result["error"]),
-                    "model_fit_diagnostics": result.get("model_fit_diagnostics", {}),
-                }
-                print(f"[strategy-lab] {tf} {strategy}: not_testable: {result['error']}", flush=True)
-                continue
-            results[strategy] = _write_strategy(tf_dir, strategy, result, common)
             print(
-                f"[strategy-lab] {tf} {strategy}: decisions={results[strategy]['metadata']['signals_count']} "
-                f"fit_attempts={results[strategy]['metadata']['model_fit_diagnostics'].get('fit_attempts', 0)}",
+                f"[strategy-lab] {args.asset} {tf} {strategy}: one strategy-specific "
+                f"Walk-Forward stream, then {len(threshold_candidates)} threshold pairs",
                 flush=True,
             )
+            predictions = backtest._walk_forward_predictions(
+                tf, features, BACKTEST_RETRAIN_EVERY, asset["symbol"], strategy
+            )
+            diagnostics = predictions.get("_diagnostics", {}) if isinstance(predictions, dict) else {}
+            prediction_count = (
+                sum(isinstance(key, int) for key in predictions)
+                if isinstance(predictions, dict) else 0
+            )
+            if prediction_count == 0:
+                reason = (
+                    f"no_walk_forward_predictions_for_strategy:{strategy}; "
+                    f"fit_failures={diagnostics.get('fit_failures', 0)}; "
+                    f"last_fit_error={diagnostics.get('last_fit_error')}"
+                )
+                strategy_results[strategy] = {
+                    "status": "not_testable",
+                    "error": reason,
+                    "model_fit_diagnostics": diagnostics,
+                    "candidate_order": [f"{strategy}__{candidate}" for _, _, candidate in threshold_candidates],
+                    "candidates": {
+                        f"{strategy}__{candidate}": {
+                            "status": "not_testable",
+                            "error": reason,
+                            "threshold_id": candidate,
+                            "score_threshold": score,
+                            "ai_threshold": ai,
+                        }
+                        for score, ai, candidate in threshold_candidates
+                    },
+                }
+                print(f"[strategy-lab] {tf} {strategy}: not_testable: {reason}", flush=True)
+                continue
 
-        if not any(item.get("status") == "ready" for item in results.values()):
-            raise RuntimeError(f"{args.asset} {tf}: no strategy produced a valid LEAN decision stream.")
+            candidate_results = {}
+            candidate_order = []
+            for index, (score, ai, candidate) in enumerate(threshold_candidates, 1):
+                candidate_key = f"{strategy}__{candidate}"
+                candidate_order.append(candidate_key)
+                print(
+                    f"[strategy-lab] {args.asset} {tf} {strategy} "
+                    f"{index}/{len(threshold_candidates)}: {candidate}",
+                    flush=True,
+                )
+                result = backtest.run(
+                    tf,
+                    bars=requested,
+                    retrain_every=BACKTEST_RETRAIN_EVERY,
+                    min_score_override=score,
+                    min_ai_override=ai,
+                    _prepared=prepared,
+                    _predictions=predictions,
+                    symbol=asset["symbol"],
+                    strategy=strategy,
+                    include_lean_payload=True,
+                    decision_only=True,
+                    end_before=cutoff,
+                )
+                if result.get("error"):
+                    candidate_results[candidate_key] = {
+                        "status": "not_testable",
+                        "error": str(result["error"]),
+                        "candidate_id": candidate_key,
+                        "threshold_id": candidate,
+                        "score_threshold": score,
+                        "ai_threshold": ai,
+                    }
+                    continue
+                written = _write_candidate(
+                    tf_dir, strategy, result, common, score, ai, live_score, live_ai
+                )
+                candidate_results[candidate_key] = written
+
+            ready = sum(item.get("status") == "ready" for item in candidate_results.values())
+            if ready == 0:
+                strategy_results[strategy] = {
+                    "status": "not_testable",
+                    "error": "no_threshold_candidate_produced_valid_decisions",
+                    "model_fit_diagnostics": diagnostics,
+                    "candidate_order": candidate_order,
+                    "candidates": candidate_results,
+                }
+            else:
+                strategy_results[strategy] = {
+                    "status": "ready",
+                    "model_fit_diagnostics": diagnostics,
+                    "candidate_order": candidate_order,
+                    "candidate_count": len(candidate_order),
+                    "ready_candidates": ready,
+                    "candidates": candidate_results,
+                }
+
+        if not any(item.get("status") == "ready" for item in strategy_results.values()):
+            raise RuntimeError(f"{args.asset} {tf}: no strategy/threshold candidate produced LEAN inputs.")
         (tf_dir / "metadata.json").write_text(
             json.dumps(common, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
         )
-        summaries[tf] = {"metadata": common, "strategies": results}
+        summaries[tf] = {
+            "metadata": common,
+            "strategy_order": list(STRATEGIES),
+            "scores": scores,
+            "ai_probabilities": ai_values,
+            "threshold_order": [candidate for _, _, candidate in threshold_candidates],
+            "strategies": strategy_results,
+        }
 
+    if not summaries:
+        raise SystemExit("No timeframe was prepared for the combined strategy/threshold lab.")
     (output / "prepared_summary.json").write_text(
         json.dumps({
+            "report_type": "LEAN real historical strategy-threshold lab",
+            "market_data_type": "real_historical_ohlc",
+            "synthetic_fixture": False,
             "request_id": args.request_id,
             "asset_key": args.asset,
             "strategy_order": list(STRATEGIES),
+            "strategy_names": STRATEGY_NAMES,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "timeframes": summaries,
+            "experiment_design": (
+                "One real historical OHLC snapshot is shared by every candidate within an asset/timeframe. "
+                "Each strategy generates its own single chronological Walk-Forward prediction stream. "
+                "All Score/AI threshold pairs are then applied to that same strategy-specific stream, "
+                "without retraining the model for each pair. Python exports decisions only; every "
+                "strategy/threshold pair is independently replayed by LEAN, which alone resolves entries, "
+                "fills, exits, and fees. Candidate selection is based on Calibration only; Holdout is "
+                "kept independent and is never used to select a strategy or threshold. The operational "
+                "live threshold pair is included as the baseline for the current baseline strategy."
+            ),
         }, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
