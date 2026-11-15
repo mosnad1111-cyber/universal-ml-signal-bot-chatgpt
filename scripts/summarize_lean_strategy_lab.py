@@ -126,6 +126,10 @@ def _validate_execution(metadata: dict, report: dict, request_id: str,
         for trade in ledger:
             _utc(trade["signal_time"])
             _utc(trade["exit_time"])
+            if str(trade.get("direction", "")).upper() not in ("BUY", "SELL"):
+                raise SystemExit(
+                    f"{timeframe}/{strategy}: LEAN trade ledger has a missing or invalid direction."
+                )
     except (KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"{timeframe}/{strategy}: LEAN trade ledger is incomplete: {exc}") from exc
     values = (gross, fees, net, report_gross, report_fees, report_net, fees_usd)
@@ -157,13 +161,31 @@ def _strategy_metrics(metadata: dict, report: dict) -> dict:
         {
             "time": item["signal_time"],
             "exit_time": item["exit_time"],
+            "direction": str(item["direction"]).upper(),
             "r": float(item["gross_r"]),
         }
         for item in report.get("trades_detail", [])
     ]
     midpoint = _utc(metadata["midpoint"])
     calibration, holdout = split_completed_trades(trades, midpoint)
+
+    # Directional results are slices of the same LEAN-closed trade ledger.
+    # Reuse the identical signal/exit-time split, and report cost sensitivity
+    # only for holdout so no fees are mistaken for broker-specific pricing.
+    directional = {}
+    for direction in ("BUY", "SELL"):
+        side_trades = [trade for trade in trades if trade["direction"] == direction]
+        side_calibration, side_holdout = split_completed_trades(side_trades, midpoint)
+        directional[direction] = {
+            "all": _json_safe_metrics(summarize_trades(side_trades, 0.0)),
+            "calibration": _json_safe_metrics(summarize_trades(side_calibration, 0.0)),
+            "holdout": _json_safe_metrics(summarize_trades(side_holdout, 0.0)),
+            "holdout_cost_005R": _json_safe_metrics(summarize_trades(side_holdout, 0.05)),
+            "holdout_cost_010R": _json_safe_metrics(summarize_trades(side_holdout, 0.10)),
+        }
+
     return {
+        "directional": directional,
         "all": _json_safe_metrics(summarize_trades(trades, 0.0)),
         "calibration": _json_safe_metrics(summarize_trades(calibration, 0.0)),
         "holdout": _json_safe_metrics(summarize_trades(holdout, 0.0)),

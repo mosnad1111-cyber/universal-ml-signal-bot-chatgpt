@@ -96,6 +96,55 @@ class LeanActionsTests(unittest.TestCase):
         self.assertIn("ليست عمولات وسيط فعلية", report)
 
 
+    def test_strategy_lab_formatter_shows_buy_and_sell_splits_and_cost_sensitivity(self):
+        metric = {
+            "trades": 2, "win_rate": 50.0, "net_r": 1.0,
+            "profit_factor": 2.0, "max_drawdown_r": 1.0,
+        }
+        directional_metric = {
+            "trades": 1, "win_rate": 100.0, "net_r": 2.0,
+            "profit_factor": "Infinity", "max_drawdown_r": 0.0,
+            "net_after_cost_r": 1.95,
+        }
+        result = {
+            "status": "executed",
+            "calibration": metric,
+            "holdout": metric,
+            "holdout_cost_005R": {"net_after_cost_r": 0.90},
+            "holdout_cost_010R": {"net_after_cost_r": 0.80},
+            "directional": {
+                direction: {
+                    "calibration": directional_metric,
+                    "holdout": directional_metric,
+                    "holdout_cost_005R": {"net_after_cost_r": 1.95},
+                    "holdout_cost_010R": {"net_after_cost_r": 1.90},
+                }
+                for direction in ("BUY", "SELL")
+            },
+            "lean_report": {"trades": 2},
+        }
+        report = LeanActionsClient.format_strategy_lab_report({
+            "asset_key": "BTC",
+            "timeframes": [{
+                "metadata": {
+                    "timeframe": "1h",
+                    "market_data_source": "Binance Spot REST BTC/USDT historical klines",
+                    "raw_bars": 2000, "completed_bars": 2000, "usable_bars": 1900,
+                    "snapshot_start": "2026-01-01T00:00:00+00:00",
+                    "snapshot_end": "2026-02-01T00:00:00+00:00",
+                    "midpoint": "2026-01-16T00:00:00+00:00",
+                    "lean_initial_cash_usd": 150000,
+                    "lean_cash_buffer_multiplier": 1.5,
+                },
+                "results": {"baseline": result},
+            }],
+        })
+        self.assertIn("BUY شراء", report)
+        self.assertIn("SELL بيع", report)
+        self.assertIn("المعايرة", report)
+        self.assertIn("0.05R", report)
+        self.assertIn("0.10R", report)
+
     def test_callback_accepts_uploaded_artifact_before_final_workflow_step_returns(self):
         request_id = "b" * 32
         db = FakeDB({
@@ -244,6 +293,19 @@ class LeanActionsTests(unittest.TestCase):
                     "metadata": executed_metadata,
                     "lean_report": executed_report,
                     "signals_count": 2,
+                    "all": {"trades": 0},
+                    "calibration": {"trades": 0},
+                    "holdout": {"trades": 0},
+                    "directional": {
+                        direction: {
+                            "all": {"trades": 0},
+                            "calibration": {"trades": 0},
+                            "holdout": {"trades": 0},
+                            "holdout_cost_005R": {"trades": 0},
+                            "holdout_cost_010R": {"trades": 0},
+                        }
+                        for direction in ("BUY", "SELL")
+                    },
                 }
                 if name == "baseline"
                 else {"status": "not_testable", "error": "insufficient_training_distribution"}
