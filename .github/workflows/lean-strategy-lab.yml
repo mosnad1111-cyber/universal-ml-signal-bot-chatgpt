@@ -189,8 +189,14 @@ jobs:
                       live_baselines += int(bool(metadata.get("is_live_baseline")))
                   if strategy_section.get("status") == "not_testable" and ready_for_strategy:
                       raise SystemExit(f"{tf}/{strategy}: status conflicts with ready candidates.")
-              if ready_total == 0 or live_baselines != 1:
-                  raise SystemExit(f"{tf}: expected ready candidates and one live baseline; got {ready_total}/{live_baselines}.")
+              baseline_ready = section["strategies"]["baseline"].get("status") == "ready"
+              expected_live_baselines = 1 if baseline_ready else 0
+              if ready_total == 0 or live_baselines != expected_live_baselines:
+                  raise SystemExit(
+                      f"{tf}: live-baseline count is inconsistent with baseline readiness; "
+                      f"ready_candidates={ready_total}, live_baselines={live_baselines}, "
+                      f"baseline_ready={baseline_ready}."
+                  )
               expected_total = len(strategies) * len(threshold_order)
               if int(meta.get("candidate_count_expected", -1)) != expected_total:
                   raise SystemExit(f"{tf}: candidate count does not match full matrix.")
