@@ -118,11 +118,11 @@ class LeanStrategyLabTests(unittest.TestCase):
         report = {
             "trades_detail": [
                 {"signal_time": "2026-10-01T00:00:00+00:00",
-                 "exit_time": "2026-10-01T00:05:00+00:00", "gross_r": 2.0},
+                 "exit_time": "2026-10-01T00:05:00+00:00", "direction": "BUY", "gross_r": 2.0},
                 {"signal_time": "2026-10-01T00:05:00+00:00",
-                 "exit_time": "2026-10-01T00:15:00+00:00", "gross_r": -1.0},
+                 "exit_time": "2026-10-01T00:15:00+00:00", "direction": "SELL", "gross_r": -1.0},
                 {"signal_time": "2026-10-01T00:15:00+00:00",
-                 "exit_time": "2026-10-01T00:20:00+00:00", "gross_r": -1.0},
+                 "exit_time": "2026-10-01T00:20:00+00:00", "direction": "SELL", "gross_r": -1.0},
             ],
             "unfilled_setups": 1,
             "unresolved_trades": 0,
@@ -132,6 +132,36 @@ class LeanStrategyLabTests(unittest.TestCase):
         self.assertEqual(metrics["holdout"]["trades"], 1)
         self.assertAlmostEqual(metrics["calibration"]["net_r"], 2.0)
         self.assertAlmostEqual(metrics["holdout"]["net_r"], -1.0)
+
+        # A completed trade that crosses the midpoint must not leak into
+        # either directional split, just as it is excluded from combined P/L.
+        self.assertEqual(metrics["directional"]["BUY"]["calibration"]["trades"], 1)
+        self.assertAlmostEqual(
+            metrics["directional"]["BUY"]["calibration"]["net_r"], 2.0
+        )
+        self.assertEqual(metrics["directional"]["BUY"]["holdout"]["trades"], 0)
+        self.assertEqual(metrics["directional"]["SELL"]["calibration"]["trades"], 0)
+        self.assertEqual(metrics["directional"]["SELL"]["holdout"]["trades"], 1)
+        self.assertAlmostEqual(
+            metrics["directional"]["SELL"]["holdout"]["net_r"], -1.0
+        )
+        self.assertAlmostEqual(
+            metrics["directional"]["SELL"]["holdout_cost_005R"]["net_after_cost_r"],
+            -1.05,
+        )
+        self.assertAlmostEqual(
+            metrics["directional"]["SELL"]["holdout_cost_010R"]["net_after_cost_r"],
+            -1.10,
+        )
+
+    def test_strategy_metrics_always_include_buy_and_sell_even_with_no_trades(self):
+        metrics = _strategy_metrics(
+            {"midpoint": "2026-10-01T00:10:00+00:00"},
+            {"trades_detail": []},
+        )
+        self.assertEqual(set(metrics["directional"]), {"BUY", "SELL"})
+        self.assertEqual(metrics["directional"]["BUY"]["all"]["trades"], 0)
+        self.assertEqual(metrics["directional"]["SELL"]["all"]["trades"], 0)
 
     def test_infinite_profit_factor_becomes_json_safe(self):
         metrics = _json_safe_metrics({"profit_factor": float("inf"), "net_r": 2.0})
