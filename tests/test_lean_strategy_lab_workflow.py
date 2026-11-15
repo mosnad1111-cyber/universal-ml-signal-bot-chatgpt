@@ -44,6 +44,16 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         self.assertNotIn("create_lean_fixture.py", workflow)
         self.assertFalse((ROOT / ".github/workflows/lean-threshold-test.yml").exists())
 
+    def test_workflow_expands_github_expressions_and_shell_candidate_ids(self):
+        workflow = (ROOT / ".github/workflows/lean-strategy-lab.yml").read_text(encoding="utf-8")
+        self.assertNotIn("\\${{", workflow)
+        self.assertNotIn("\\${strategy}", workflow)
+        self.assertNotIn("\\${threshold_id}", workflow)
+        self.assertIn("OUTPUT_DIR: ${{ runner.temp }}/lean-lab/input", workflow)
+        self.assertIn("REQUEST_ID: ${{ inputs.request_id }}", workflow)
+        self.assertIn("PREPARED_DIR: ${{ runner.temp }}/lean-lab/input", workflow)
+        self.assertIn('candidate_id="${strategy}__${threshold_id}"', workflow)
+
     def test_lean_report_records_candidate_identity_and_fixed_unit_execution(self):
         algorithm = (ROOT / "lean_runtime/LeanBacktestAlgorithm.py").read_text(encoding="utf-8")
         self.assertIn('"strategy": self.metadata.get("strategy", "baseline")', algorithm)
