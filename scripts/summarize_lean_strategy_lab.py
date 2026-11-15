@@ -398,10 +398,6 @@ def main() -> None:
             ])
             direction_selected = {}
             for direction in ("BUY", "SELL"):
-                selected_side, _ = select_calibration_candidates(
-                    all_candidates_for_strategy,
-                    metric_key=f"directional.{direction}.calibration_net",
-                ) if False else (None, [])
                 # Directional ranking uses an explicit side-metric projection to
                 # keep the same eligibility gate and never reads Holdout.
                 side_rows = []
