@@ -361,7 +361,7 @@ class LeanActionsClient:
                 name = html.escape(LAB_STRATEGY_NAMES.get(strategy, strategy))
                 lines.append(f"  {name}: نفّذ {ready} تركيبة؛ غير قابلة للاختبار {unavailable}")
                 if best:
-                    lines.extend(cls._format_lab_candidate(best, include_sides=False)[0:3])
+                    lines.extend(cls._format_lab_candidate(best, include_sides=True))
                 else:
                     fit = strategy_result.get("model_fit_diagnostics", {})
                     if strategy_result.get("error"):
