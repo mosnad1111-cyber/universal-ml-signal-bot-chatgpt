@@ -10,7 +10,7 @@ class LeanStrategyLabWorkflowTests(unittest.TestCase):
         telegram = (ROOT / "telegram_ar.py").read_text(encoding="utf-8")
         self.assertIn("dispatch_strategy_lab", telegram)
         self.assertIn("'mode': 'strategy_lab'", telegram)
-        self.assertIn("مختبر الاستراتيجيات والعتبات", telegram)
+        self.assertIn("المختبر الموحد للاستراتيجيات والعتبات", telegram)
         self.assertNotIn("thresholds:GOLD", telegram)
         self.assertNotIn("thresholds:BTC", telegram)
         self.assertNotIn("def _grid_search", telegram)
