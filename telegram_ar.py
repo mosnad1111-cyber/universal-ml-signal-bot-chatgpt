@@ -153,8 +153,8 @@ class Telegram:
             self.send('⏳ محرك المراقبة لم يبدأ بعد.', cid)
             return
         open_rows = self.engine.db.all_open()
-        waiting = sum(row.get('status') == 'WAITING' for row in open_rows)
-        active = sum(row.get('status') == 'ACTIVE' for row in open_rows)
+        waiting = sum(row['status'] == 'WAITING' for row in open_rows)
+        active = sum(row['status'] == 'ACTIVE' for row in open_rows)
         self.send(
             '🟢 <b>المراقبة التلقائية تعمل</b>\n'
             'يفحص البوت الذهب والبيتكوين على 5m و15m و1h تلقائيًا كل دقيقة افتراضيًا.\n'
