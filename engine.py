@@ -656,12 +656,23 @@ class Engine:
         return (f"{summary['trades']} صفقة | WR {summary['win_rate']:.1f}% | "
                 f"R الإجمالي {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | Profit Factor {pf_text}")
 
+    @staticmethod
+    def _cost_adjusted_summary(trades, cost_r):
+        adjusted = []
+        for row in trades:
+            item = dict(row)
+            item['_r'] = float(item['_r']) - float(cost_r)
+            adjusted.append(item)
+        return Engine._performance_summary(adjusted)
+
     def stats_text(self):
+        # The report deliberately uses only the most recent 10,000 stored signal
+        # records and excludes WAITING/ACTIVE/CANCELLED rows from performance.
         recent = [dict(row) for row in self.db.recent(10000)]
         lines = [
-            '📊 <b>تقرير الأداء التفصيلي</b>',
-            'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة فقط.',
-            'النتائج بوحدة R قبل السبريد والانزلاق وعمولات الوسيط الفعلية؛ هذه ليست صافي نتيجة وسيط.',
+            '📊 <b>تقرير الأداء التشخيصي حسب الأصل والفريم والاتجاه</b>',
+            'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة ذات نتيجة قابلة للحساب فقط.',
+            'كل النتائج بوحدة R قبل التكاليف الفعلية. حساسية 0.05R و0.10R افتراضات وليست رسوم وسيط مؤكدة.',
         ]
         for asset in ASSETS.values():
             symbol = asset['symbol']
@@ -676,8 +687,10 @@ class Engine:
             trades = []
             for row in closed:
                 realized = self._realized_r(row)
-                if realized is not None:
-                    enriched = dict(row); enriched['_r'] = realized; trades.append(enriched)
+                if realized is not None and pd.notna(realized):
+                    enriched = dict(row)
+                    enriched['_r'] = float(realized)
+                    trades.append(enriched)
             overall = self._performance_summary(trades)
             scores = [float(row['score']) for row in trades if row.get('score') is not None]
             probabilities = [float(row['ai_prob']) for row in trades if row.get('ai_prob') is not None]
@@ -689,39 +702,81 @@ class Engine:
                 f'✅ TP: {targets} | ❌ SL: {stops} | ⏳ TIMEOUT: {timeouts}',
                 f"📈 رابحة/خاسرة/تعادل حسب R: {overall['wins']}/{overall['losses']}/{overall['flats']}",
                 f"🎯 نسبة الصفقات ذات R موجب: <b>{overall['win_rate']:.1f}%</b>",
-                f"⚖️ إجمالي R قبل التكاليف: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
+                f"⚖️ إجمالي R: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
                 f"💰 متوسط الربح: {overall['avg_win']:+.2f}R | متوسط الخسارة: {overall['avg_loss']:+.2f}R | Profit Factor: {pf_text}",
                 f"📉 أقصى تراجع: {overall['max_drawdown']:.2f}R | أطول سلسلة ربح/خسارة: {overall['max_win_streak']}/{overall['max_loss_streak']}",
             ])
-            if scores: lines.append(f'🧮 متوسط Score: {sum(scores) / len(scores):.1f}/100')
-            if probabilities: lines.append(f'🧠 متوسط AI: {sum(probabilities) / len(probabilities) * 100:.1f}%')
+            if scores:
+                lines.append(f'🧮 متوسط Score: {sum(scores) / len(scores):.1f}/100')
+            if probabilities:
+                lines.append(f'🧠 متوسط AI: {sum(probabilities) / len(probabilities) * 100:.1f}%')
+            for cost in (0.05, 0.10):
+                cost_summary = self._cost_adjusted_summary(trades, cost)
+                cost_pf = cost_summary['profit_factor']
+                cost_pf_text = '∞' if cost_pf == float('inf') else f'{cost_pf:.2f}'
+                lines.append(
+                    f"🧾 حساسية تكلفة {cost:.2f}R/صفقة: صافي {cost_summary['net_r']:+.2f}R | "
+                    f"Exp {cost_summary['expectancy']:+.3f}R | PF {cost_pf_text}"
+                )
+
             lines.append('⏱️ <b>تفصيل الفريمات والاتجاهات</b>')
             for tf in TIMEFRAMES:
                 tf_trades = [row for row in trades if row.get('timeframe') == tf]
-                if not tf_trades:
-                    lines.append(f'{tf}: لا توجد صفقات مغلقة.'); continue
                 tf_summary = self._performance_summary(tf_trades)
-                lines.append(f"{tf}: {self._fmt_performance(tf_summary)} | DD {tf_summary['max_drawdown']:.2f}R")
+                lines.append(f"\n<b>{tf}</b>: {self._fmt_performance(tf_summary)} | DD {tf_summary['max_drawdown']:.2f}R")
                 for direction in ('BUY', 'SELL'):
                     directional = [row for row in tf_trades if row.get('direction') == direction]
-                    if directional:
-                        lines.append(f"  {'🟢 شراء' if direction == 'BUY' else '🔴 بيع'}: {self._fmt_performance(self._performance_summary(directional))}")
-            lines.append('🧠 <b>تفاصيل تقييم النموذج حسب الفريم</b>')
+                    summary = self._performance_summary(directional)
+                    label = '🟢 شراء' if direction == 'BUY' else '🔴 بيع'
+                    if not directional:
+                        lines.append(f'  {label}: لا توجد صفقات مغلقة.')
+                        continue
+                    lines.append(f'  {label}: {self._fmt_performance(summary)} | DD {summary["max_drawdown"]:.2f}R')
+                    for cost in (0.05, 0.10):
+                        adjusted = self._cost_adjusted_summary(directional, cost)
+                        adjusted_pf = adjusted['profit_factor']
+                        adjusted_pf_text = '∞' if adjusted_pf == float('inf') else f'{adjusted_pf:.2f}'
+                        lines.append(
+                            f'    بعد تكلفة افتراضية {cost:.2f}R: {adjusted["net_r"]:+.2f}R | '
+                            f'Exp {adjusted["expectancy"]:+.3f}R | PF {adjusted_pf_text}'
+                        )
+                    if len(directional) < 20:
+                        lines.append('    ⚠️ عينة صغيرة؛ لا يُعتمد عليها وحدها لتغيير شروط التداول.')
+
+            lines.append('\n🧠 <b>تشخيص جودة نموذج AI حسب الفريم والاتجاه</b>')
             metrics = ai.info()
             for tf in TIMEFRAMES:
                 value = metrics.get(tf, {})
                 if not value:
-                    lines.append(f"{tf}: ❌ {ai.errors.get(tf, 'بيانات النموذج غير متوفرة')}"); continue
-                auc, accuracy = value.get('auc'), value.get('accuracy')
-                auc_text = f'{float(auc):.3f}' if auc is not None else '—'
-                acc_text = f'{float(accuracy):.3f}' if accuracy is not None else '—'
+                    lines.append(f"{tf}: ❌ {ai.errors.get(tf, 'بيانات النموذج غير متوفرة')}")
+                    continue
+                def metric_text(key):
+                    raw = value.get(key)
+                    return f'{float(raw):.3f}' if raw is not None else '—'
                 training_rows = int(value.get('deployment_training_rows', value.get('training_rows', 0)) or 0)
-                lines.append(f"{tf}: {value.get('engine', '-')} | AUC {auc_text} | Accuracy {acc_text} | تدريب {training_rows:,} صف")
+                lines.append(
+                    f"{tf}: {value.get('engine', '-')} | AUC {metric_text('auc')} | "
+                    f"Accuracy {metric_text('accuracy')} | Precision {metric_text('precision')} | "
+                    f"Recall {metric_text('recall')} | PR-AUC {metric_text('pr_auc')} | "
+                    f"تدريب {training_rows:,} صف"
+                )
                 if value.get('validation_rows') is not None:
-                    lines.append(f"  تحقق: {int(value['validation_rows']):,} صف | إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | دقة خط الأساس {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%")
-                for label, key in (('BUY','buy_auc'),('SELL','sell_auc')):
-                    if value.get(key) is not None: lines.append(f"  AUC {label}: {float(value[key]):.3f}")
-            lines.append('ℹ️ AUC وAccuracy يقيسان عينة تحقق النموذج ولا يمثلان مباشرةً نسبة نجاح الصفقات.')
+                    lines.append(
+                        f"  تحقق: {int(value['validation_rows']):,} صف | "
+                        f"إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | "
+                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%"
+                    )
+                for label, prefix in (('BUY', 'buy'), ('SELL', 'sell')):
+                    rows = value.get(f'{prefix}_validation_rows')
+                    lines.append(
+                        f"  {label}: n={int(rows or 0)} | AUC {metric_text(prefix+'_auc')} | "
+                        f"Precision {metric_text(prefix+'_precision')} | "
+                        f"Recall {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                    )
+            lines.append(
+                'ℹ️ مقاييس AI من عينة التحقق التاريخية وليست نسبة نجاح الصفقات. '
+                'Accuracy تُقرأ بجانب خط الأساس وتوزيع الفئات، ولا تكفي وحدها للحكم.'
+            )
         return '\n'.join(lines)
 
     def start(self):
