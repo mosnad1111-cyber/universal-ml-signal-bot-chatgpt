@@ -769,7 +769,7 @@ class Engine:
                 for label, prefix in (('BUY', 'buy'), ('SELL', 'sell')):
                     rows = value.get(f'{prefix}_validation_rows')
                     lines.append(
-                        f"  {label}: n={int(rows or 0)} | AUC {metric_text(prefix+'_auc')} | "
+                        f"  AUC {label}: {metric_text(prefix+'_auc')} | n={int(rows or 0)} | "
                         f"Precision {metric_text(prefix+'_precision')} | "
                         f"Recall {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
                     )
