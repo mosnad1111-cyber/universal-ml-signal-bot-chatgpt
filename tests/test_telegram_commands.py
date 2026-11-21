@@ -63,7 +63,7 @@ class TelegramCommandTests(unittest.TestCase):
         with patch('telegram_ar.fetch', return_value=frame) as fetch_market:
             self.bot.handle_command('/price BTC', 123)
         fetch_market.assert_called_once_with('BINANCE:BTCUSDT', '5m', period=300)
-        self.assertIn('65000.5000', self.bot.sent[-1][0])
+        self.assertIn('65,000.5000', self.bot.sent[-1][0])
         self.assertIn('Binance REST', self.bot.sent[-1][0])
 
     def test_threshold_command_uses_asset_specific_live_thresholds(self):
