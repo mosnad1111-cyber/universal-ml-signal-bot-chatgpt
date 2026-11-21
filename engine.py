@@ -14,20 +14,8 @@ class Engine:
         self.send = send
         self.db = DB(DB_PATH)
         self.ai = {a['symbol']: GoldAI() for a in ASSETS.values()}
-        # Retire the legacy BTC 1h paper experiment; live signals are untouched.
-        self.db.delete_paper_trial(PAPER_TRIAL_ID)
-        trial_start = self.db.get_setting('paper_trial_start_utc')
-        if not trial_start:
-            trial_start = datetime.now(timezone.utc).isoformat()
-            self.db.set_setting('paper_trial_start_utc', trial_start)
-        trial_end = self.db.get_setting('paper_trial_end_utc')
-        if not trial_end:
-            trial_end = (pd.Timestamp(trial_start) + pd.Timedelta(days=PAPER_TRIAL_DAYS)).isoformat()
-            self.db.set_setting('paper_trial_end_utc', trial_end)
-        self.paper_trial_start_utc = str(trial_start)
-        self.paper_trial_end_utc = str(trial_end)
-        self.paper_last_model = 0.0
-        self.paper_last_train_attempt = 0.0
+        # Retire only the legacy BTC 1h paper experiment; live signals remain untouched.
+        self.db.delete_paper_trial('btc_1h_trend_pullback_score65_ai60_v1')
         self.stop_event = threading.Event()
         self.last_model = 0
         self.last_train_attempt = 0
