@@ -115,6 +115,18 @@ class Engine:
             if len(x)<300: diag['reject']='insufficient_feature_bars'; return None
             if tf not in ai.models: diag['reject']='model_not_ready'; return None
             row=x.iloc[-2]; diag['candle_time']=row.name.isoformat(); diag['last_raw_time']=df.index[-1].isoformat()
+            # Preserve the exact decision context so BUY rejections can be
+            # separated into market-regime, model, score, entry-risk and execution causes.
+            for field in ('Open','High','Low','Close','atr','atr_pct','rsi','macd_hist',
+                          'ema20','ema50','ema200','trend_strength','dist_ema20',
+                          'dist_ema50','dist_ema200','vol_ratio','breakout_up','breakout_dn'):
+                if field in row and pd.notna(row[field]):
+                    diag[f'feature_{field.lower()}'] = float(row[field])
+            diag['ctx15_trend'] = int(row.get('ctx15_trend', 0) or 0)
+            diag['ctx1h_trend'] = int(row.get('ctx1h_trend', 0) or 0)
+            diag['return_1'] = float(row.get('ret1', 0) or 0)
+            diag['return_3'] = float(row.get('ret3', 0) or 0)
+            diag['return_6'] = float(row.get('ret6', 0) or 0)
             probs={'BUY':ai.probability(tf,row,'BUY'),'SELL':ai.probability(tf,row,'SELL')}
             diag['buy_ai']=None if probs['BUY'] is None else round(probs['BUY'],4); diag['sell_ai']=None if probs['SELL'] is None else round(probs['SELL'],4)
             ctx=self._context(tf,row.name,symbol); self.last_context[key]=ctx; context={'trend':0}
