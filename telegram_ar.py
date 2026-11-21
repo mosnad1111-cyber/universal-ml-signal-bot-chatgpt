@@ -58,7 +58,6 @@ class Telegram:
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'⚙️ LEAN تاريخي حقيقي — الذهب','callback_data':'lean_menu:GOLD'}, {'text':'⚙️ LEAN تاريخي حقيقي — BTC','callback_data':'lean_menu:BTC'}],
             [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
-            [{'text':'🧪 تقرير Paper BTC 1h','callback_data':'paper:report'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
@@ -286,8 +285,6 @@ class Telegram:
                         elif data.startswith('lab:'):
                             asset_key = data.split(':', 1)[1].upper()
                             self._strategy_lab(cid, asset_key)
-                        elif data == 'paper:report':
-                            self.send_long(self.engine.paper_trial_text(), cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
