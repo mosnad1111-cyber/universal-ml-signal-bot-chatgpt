@@ -109,7 +109,13 @@ class DB:
                 closed_at TEXT,
                 close_price REAL,
                 UNIQUE(trial_id,symbol,timeframe,candle_time));
-                CREATE INDEX IF NOT EXISTS idx_paper_trial_status ON paper_trades(trial_id,status);"""
+                CREATE INDEX IF NOT EXISTS idx_paper_trial_status ON paper_trades(trial_id,status);
+                CREATE TABLE IF NOT EXISTS scan_audit(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, timeframe TEXT NOT NULL,
+                candle_time TEXT, scanned_at TEXT NOT NULL, best_direction TEXT, reject_reason TEXT,
+                buy_ai REAL, sell_ai REAL, buy_score REAL, sell_score REAL, context_trend INTEGER,
+                diagnostics_json TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at);"""
             )
             cols = {r[1] for r in c.execute("PRAGMA table_info(signals)")}
             if "features_json" not in cols:
@@ -177,6 +183,13 @@ class DB:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_trial_status ON paper_trades(trial_id,status)"
             )
+            c.execute("""CREATE TABLE IF NOT EXISTS scan_audit(
+                id BIGSERIAL PRIMARY KEY, symbol TEXT NOT NULL, timeframe TEXT NOT NULL,
+                candle_time TEXT, scanned_at TEXT NOT NULL, best_direction TEXT, reject_reason TEXT,
+                buy_ai DOUBLE PRECISION, sell_ai DOUBLE PRECISION, buy_score DOUBLE PRECISION,
+                sell_score DOUBLE PRECISION, context_trend INTEGER, diagnostics_json TEXT NOT NULL
+            )""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at)")
             c.execute(
                 "ALTER TABLE signals ADD COLUMN IF NOT EXISTS features_json TEXT"
             )
@@ -190,6 +203,40 @@ class DB:
                 """CREATE INDEX IF NOT EXISTS idx_signals_symbol_tf_status
                    ON signals(symbol,timeframe,status)"""
             )
+
+
+    def record_scan_event(self, diagnostic):
+        """Persist a compact audit row for accepted and rejected scan attempts."""
+        now = datetime.now(timezone.utc).isoformat()
+        payload = json.dumps(diagnostic, ensure_ascii=False, default=str)
+        values = (
+            str(diagnostic.get("symbol", "")), str(diagnostic.get("timeframe", "")),
+            str(diagnostic.get("candle_time") or ""), now,
+            str(diagnostic.get("best_direction") or ""),
+            str(diagnostic.get("reject") or ""),
+            float(diagnostic["buy_ai"]) if diagnostic.get("buy_ai") is not None else None,
+            float(diagnostic["sell_ai"]) if diagnostic.get("sell_ai") is not None else None,
+            float(diagnostic["buy_score"]) if diagnostic.get("buy_score") is not None else None,
+            float(diagnostic["sell_score"]) if diagnostic.get("sell_score") is not None else None,
+            int(diagnostic.get("context_trend", 0) or 0), payload,
+        )
+        with self.lock, self._conn() as c:
+            self._execute(c, """INSERT INTO scan_audit(
+                symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,
+                buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+
+    def delete_paper_trial(self, trial_id):
+        """Explicitly retire one paper experiment and its settings; never touches live signals."""
+        keys = (
+            "paper_trial_start_utc", "paper_trial_end_utc",
+            "paper_trial_model_trained_at", "paper_trial_data_source",
+            "paper_trial_model_last_error", "paper_trial_report_sent",
+        )
+        with self.lock, self._conn() as c:
+            self._execute(c, "DELETE FROM paper_trades WHERE trial_id=?", (trial_id,))
+            for key in keys:
+                self._execute(c, "DELETE FROM settings WHERE key=?", (key,))
 
     def create(self, s):
         now = datetime.now(timezone.utc).isoformat()
