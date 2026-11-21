@@ -5,7 +5,8 @@ import json
 import uuid
 from datetime import datetime, timezone
 from lean_actions import LeanActionsClient
-from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY
+from config import ASSETS, TELEGRAM_BOT_TOKEN, BACKTEST_BARS_5M, BACKTEST_BARS_15M, BACKTEST_BARS_1H, BACKTEST_RETRAIN_EVERY, TIMEFRAMES, thresholds_for
+from market import fetch
 from backtest import GoldBacktest
 
 class Telegram:
@@ -58,7 +59,6 @@ class Telegram:
             [{'text':'🔎 تشخيص الإشارات','callback_data':'diagnostics'}, {'text':'🧪 Backtest الذهب','callback_data':'backtest:GOLD'}, {'text':'🧪 Backtest البيتكوين','callback_data':'backtest:BTC'}],
             [{'text':'⚙️ LEAN تاريخي حقيقي — الذهب','callback_data':'lean_menu:GOLD'}, {'text':'⚙️ LEAN تاريخي حقيقي — BTC','callback_data':'lean_menu:BTC'}],
             [{'text':'🧭 مختبر الاستراتيجيات — الذهب','callback_data':'lab:GOLD'}, {'text':'🧭 مختبر الاستراتيجيات — BTC','callback_data':'lab:BTC'}],
-            [{'text':'🧪 تقرير Paper BTC 1h','callback_data':'paper:report'}],
             [{'text':'ℹ️ حالة البوت','callback_data':'status'}]
         ]}
 
@@ -70,6 +70,154 @@ class Telegram:
             r=requests.post(self.base+'/sendMessage',json={'chat_id':cid,'text':self.menu(),'parse_mode':'HTML','reply_markup':self.keyboard()},timeout=20)
             return bool(r.ok and r.json().get('ok'))
         except Exception: return False
+
+    def _register_commands(self):
+        """Publish only commands implemented by this bot to Telegram's command menu."""
+        if not self.base:
+            return False
+        commands = [
+            {'command': 'menu', 'description': 'عرض القائمة الكاملة'},
+            {'command': 'signal', 'description': 'تحليل فوري: /signal BTC 15m'},
+            {'command': 'watch', 'description': 'حالة المراقبة التلقائية'},
+            {'command': 'price', 'description': 'آخر سعر متاح: /price GOLD أو BTC'},
+            {'command': 'threshold', 'description': 'عرض حدود Score وAI الفعالة'},
+        ]
+        try:
+            response = requests.post(
+                self.base + '/setMyCommands',
+                json={'commands': commands},
+                timeout=15,
+            )
+            ok = bool(response.ok and response.json().get('ok'))
+            if not ok:
+                print(f'[telegram] setMyCommands failed: {response.text[:300]}', flush=True)
+            return ok
+        except Exception as exc:
+            print(f'[telegram] setMyCommands error: {type(exc).__name__}: {exc}', flush=True)
+            return False
+
+    @staticmethod
+    def _parse_asset(value):
+        aliases = {
+            'BTC': 'BTC', 'BITCOIN': 'BTC', 'BITCOINUSDT': 'BTC',
+            'بيتكوين': 'BTC', 'البيتكوين': 'BTC',
+            'GOLD': 'GOLD', 'XAU': 'GOLD', 'XAUUSD': 'GOLD',
+            'ذهب': 'GOLD', 'الذهب': 'GOLD',
+        }
+        return aliases.get(str(value or '').strip().upper(), aliases.get(str(value or '').strip()))
+
+    @staticmethod
+    def _parse_timeframe(value):
+        aliases = {'5': '5m', '5M': '5m', '15': '15m', '15M': '15m',
+                   '1H': '1h', 'H1': '1h', '60': '1h', '60M': '1h'}
+        return aliases.get(str(value or '').strip().upper())
+
+    def _command_signal(self, cid, args):
+        if self.engine is None:
+            self.send('⏳ محرك التحليل لم يبدأ بعد. أعد المحاولة بعد لحظات.', cid)
+            return
+        # BTC 15m is the default because it is the configured primary reference.
+        asset_key = self._parse_asset(args[0]) if args else 'BTC'
+        timeframe = self._parse_timeframe(args[1]) if len(args) > 1 else '15m'
+        if asset_key not in ASSETS or timeframe not in TIMEFRAMES:
+            self.send('صيغة الأمر: /signal BTC 15m\nالأصول: BTC أو GOLD\nالفريمات: 5m أو 15m أو 1h', cid)
+            return
+        asset = ASSETS[asset_key]
+        try:
+            signal = self.engine.scan(timeframe, asset['symbol'])
+            if signal:
+                # Engine.scan already sends the full entry/SL/TP alert to the paired chat.
+                self.send(f'✅ تم إنشاء وإرسال إشارة {asset["label"]} على {timeframe}.', cid)
+            else:
+                diag = self.engine.last_diagnostics.get(f'{asset["symbol"]}|{timeframe}', {})
+                labels = {
+                    'score_below_threshold': 'Score أقل من الحد المطلوب',
+                    'ai_below_threshold': 'احتمال AI أقل من الحد المطلوب',
+                    'risk_out_of_range': 'المخاطرة خارج النطاق',
+                    'model_not_ready': 'نموذج AI غير جاهز لهذا الفريم',
+                    'open_signal_exists': 'توجد إشارة مفتوحة بالفعل لهذا الأصل والفريم',
+                    'insufficient_feature_bars': 'بيانات الشموع غير كافية',
+                    'no_model_probabilities': 'لم ينتج النموذج احتمالات صالحة',
+                    'direction_ambiguous': 'اتجاه السوق غير واضح',
+                    'against_higher_timeframe_trend': 'الإعداد يعاكس اتجاه الفريم الأعلى',
+                    'telegram_not_ready': 'إعداد Telegram غير مكتمل',
+                }
+                reason = labels.get(diag.get('reject'), diag.get('reject', 'لا يوجد إعداد مستوفٍ للشروط الآن'))
+                self.send(f'⚪ لا توجد إشارة جديدة\nالأصل: {asset["label"]}\nالفريم: {timeframe}\nالسبب: {reason}', cid)
+        except Exception as exc:
+            self.send(f'❌ تعذر تحليل {asset["label"]} على {timeframe}: {type(exc).__name__}: {exc}', cid)
+
+    def _command_watch(self, cid):
+        if self.engine is None:
+            self.send('⏳ محرك المراقبة لم يبدأ بعد.', cid)
+            return
+        open_rows = self.engine.db.all_open()
+        waiting = sum(row['status'] == 'WAITING' for row in open_rows)
+        active = sum(row['status'] == 'ACTIVE' for row in open_rows)
+        self.send(
+            '🟢 <b>المراقبة التلقائية تعمل</b>\n'
+            'يفحص البوت الذهب والبيتكوين على 5m و15m و1h تلقائيًا كل دقيقة افتراضيًا.\n'
+            'ويراقب تفعيل الدخول ووقف الخسارة والهدف للصفقات المفتوحة.\n'
+            f'بانتظار الدخول: {waiting}\nمفعّلة: {active}\n'
+            'ملاحظة: هذا الأمر يعرض الحالة؛ لا يوقف المراقبة ولا يغيّر إعداداتها.',
+            cid,
+        )
+
+    def _command_price(self, cid, args):
+        asset_key = self._parse_asset(args[0]) if args else 'BTC'
+        if asset_key not in ASSETS:
+            self.send('صيغة الأمر: /price BTC أو /price GOLD', cid)
+            return
+        asset = ASSETS[asset_key]
+        try:
+            frame = fetch(asset['symbol'], '5m', period=300)
+            if frame is None or frame.empty:
+                raise RuntimeError('لم تصل بيانات سعر')
+            candle = frame.iloc[-1]
+            stamp = frame.index[-1]
+            source = frame.attrs.get('market_data_source', 'مزود بيانات السوق')
+            self.send(
+                f'💱 <b>{asset["label"]}</b>\n'
+                f'آخر إغلاق/سعر شمعة 5m متاح: <b>{float(candle["Close"]):,.4f}</b>\n'
+                f'وقت الشمعة: {stamp.isoformat()}\n'
+                f'المصدر: {source}\n'
+                'ℹ️ السعر المعروض هو آخر قيمة شمعة متاحة، وليس عرض سعر تنفيذ مضمونًا.',
+                cid,
+            )
+        except Exception as exc:
+            self.send(f'❌ تعذر جلب سعر {asset["label"]}: {type(exc).__name__}: {exc}', cid)
+
+    def _command_thresholds(self, cid):
+        lines = ['🎯 <b>حدود قبول الإشارات الفعالة</b>', '']
+        for key, asset in ASSETS.items():
+            lines.append(f'{asset["icon"]} <b>{asset["label"]}</b>')
+            for timeframe in TIMEFRAMES:
+                score, ai_probability = thresholds_for(timeframe, asset['symbol'])
+                lines.append(f'{timeframe}: Score ≥ {score:g} | AI ≥ {ai_probability * 100:g}%')
+            lines.append('')
+        lines.append('هذه الحدود تخص قبول الإشارات الحية، ولا تغيّر إعدادات تجارب Paper أو مختبر LEAN.')
+        self.send('\n'.join(lines), cid)
+
+    def handle_command(self, text, cid):
+        """Route Telegram slash commands to real bot functionality."""
+        parts = (text or '').strip().split()
+        if not parts or not parts[0].startswith('/'):
+            return False
+        command = parts[0].split('@', 1)[0].lower()
+        args = parts[1:]
+        if command in ('/start', '/menu', '/help'):
+            self.send_menu(cid)
+        elif command == '/signal':
+            self._command_signal(cid, args)
+        elif command == '/watch':
+            self._command_watch(cid)
+        elif command == '/price':
+            self._command_price(cid, args)
+        elif command == '/threshold':
+            self._command_thresholds(cid)
+        else:
+            self.send('❔ هذا الأمر غير مدعوم. استخدم /menu لعرض وظائف البوت.', cid)
+        return True
 
     def _authorized_chat(self,cid):
         saved = None
@@ -252,7 +400,12 @@ class Telegram:
                     if msg:
                         cid=msg['chat']['id']
                         if not self._authorized_chat(cid): continue
-                        self._remember_chat(cid); self.send_menu(cid)
+                        if not self._remember_chat(cid): continue
+                        message_text = msg.get('text', '')
+                        if message_text.startswith('/'):
+                            self.handle_command(message_text, cid)
+                        elif message_text:
+                            self.send('استخدم /menu لعرض الأوامر والخيارات المتاحة.', cid)
                     cb=u.get('callback_query')
                     if cb:
                         cid=cb['message']['chat']['id']
@@ -286,8 +439,6 @@ class Telegram:
                         elif data.startswith('lab:'):
                             asset_key = data.split(':', 1)[1].upper()
                             self._strategy_lab(cid, asset_key)
-                        elif data == 'paper:report':
-                            self.send_long(self.engine.paper_trial_text(), cid)
                         elif data=='recent':
                             rows=self.engine.db.recent(8)
                             if not rows: self.send('📋 لا توجد إشارات مسجلة بعد.',cid)
@@ -300,4 +451,6 @@ class Telegram:
             except Exception: time.sleep(5)
 
     def start(self,engine):
-        self.engine=engine; threading.Thread(target=self.poll,daemon=True).start()
+        self.engine=engine
+        self._register_commands()
+        threading.Thread(target=self.poll,daemon=True).start()
