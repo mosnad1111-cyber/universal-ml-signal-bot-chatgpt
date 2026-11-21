@@ -77,8 +77,8 @@ class Engine:
                 x[prefix+'_trend']=0; x[prefix+'_rsi']=50; x[prefix+'_macd_hist']=0; x[prefix+'_dist_ema20']=0
         return x
 
-    def _thresholds(self, tf):
-        return thresholds_for(tf)
+    def _thresholds(self, tf, symbol=None):
+        return thresholds_for(tf, symbol)
 
     def signal_text(self, s):
         side = '🟢 شراء' if s['direction'] == 'BUY' else '🔴 بيع'; p = s['ai_prob'] * 100
@@ -123,7 +123,7 @@ class Engine:
                 t15=ctx.get('15m',{}).get('trend',0); t1h=ctx.get('1h',{}).get('trend',0); context['trend']=1 if t15>0 and t1h>0 else (-1 if t15<0 and t1h<0 else 0)
             elif tf=='15m': context['trend']=ctx.get('1h',{}).get('trend',0)
             diag['context_trend']=context['trend']
-            min_score, min_ai=self._thresholds(tf); diag['min_score_required']=min_score; diag['min_ai_required']=min_ai
+            min_score, min_ai=self._thresholds(tf, symbol); diag['min_score_required']=min_score; diag['min_ai_required']=min_ai
             setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,min_score,min_ai,context,diagnostics=diag)
             if not setup: self.last_diagnostics[key]=diag; return None
             if not signal_direction_allowed(tf,setup['direction']):

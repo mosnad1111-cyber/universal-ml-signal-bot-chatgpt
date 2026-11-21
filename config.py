@@ -17,6 +17,9 @@ ATR_PERIOD=int(os.getenv('ATR_PERIOD','14')); SL_ATR_MULT=float(os.getenv('SL_AT
 MIN_SCORE=float(os.getenv('MIN_SCORE','65')); MIN_AI_PROB=float(os.getenv('MIN_AI_PROB','0.50'))
 MIN_SCORE_5M=float(os.getenv('MIN_SCORE_5M','60')); MIN_AI_PROB_5M=float(os.getenv('MIN_AI_PROB_5M','0.30'))
 MIN_SCORE_15M=float(os.getenv('MIN_SCORE_15M','65')); MIN_AI_PROB_15M=float(os.getenv('MIN_AI_PROB_15M','0.30'))
+# BTC 15m production thresholds are asset-specific; other assets keep the shared timeframe defaults.
+BTC_MIN_SCORE_15M=float(os.getenv('BTC_MIN_SCORE_15M','65'))
+BTC_MIN_AI_PROB_15M=float(os.getenv('BTC_MIN_AI_PROB_15M','0.30'))
 MIN_SCORE_1H=float(os.getenv('MIN_SCORE_1H','60')); MIN_AI_PROB_1H=float(os.getenv('MIN_AI_PROB_1H','0.35'))
 DISABLE_15M_SIGNALS=os.getenv('DISABLE_15M_SIGNALS','false').strip().lower() in ('1','true','yes','on')
 DISABLE_1H_SELL_SIGNALS=os.getenv('DISABLE_1H_SELL_SIGNALS','false').strip().lower() in ('1','true','yes','on')
@@ -49,7 +52,9 @@ PAPER_MIN_AI_PROB=float(os.getenv('PAPER_MIN_AI_PROB','0.60'))
 PAPER_FEE_R=float(os.getenv('PAPER_FEE_R','0.05'))
 # Retrain every 1000 candles by default: fewer costly fits while preserving strict chronological walk-forward splits.
 BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','1000'))
-def thresholds_for(tf):
+def thresholds_for(tf, symbol=None):
+    if tf == '15m' and symbol == BTC_DATA_SYMBOL:
+        return BTC_MIN_SCORE_15M, BTC_MIN_AI_PROB_15M
     if tf == '5m': return MIN_SCORE_5M, MIN_AI_PROB_5M
     if tf == '15m': return MIN_SCORE_15M, MIN_AI_PROB_15M
     if tf == '1h': return MIN_SCORE_1H, MIN_AI_PROB_1H
