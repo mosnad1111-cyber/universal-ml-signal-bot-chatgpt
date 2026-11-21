@@ -14,9 +14,8 @@ class Engine:
         self.send = send
         self.db = DB(DB_PATH)
         self.ai = {a['symbol']: GoldAI() for a in ASSETS.values()}
-        # Paper research uses its own model and persistent ledger; live AI/signals stay untouched.
-        self.paper_ai = GoldAI()
-        self.paper_trial_id = PAPER_TRIAL_ID
+        # Retire the legacy BTC 1h paper experiment; live signals are untouched.
+        self.db.delete_paper_trial(PAPER_TRIAL_ID)
         trial_start = self.db.get_setting('paper_trial_start_utc')
         if not trial_start:
             trial_start = datetime.now(timezone.utc).isoformat()
@@ -151,6 +150,12 @@ class Engine:
         if reason:
             counts=self.reject_counts.setdefault(key,{})
             counts[reason]=counts.get(reason,0)+1
+        # Persist every scan, including rejected BUY/SELL candidates, for the
+        # next 14-day diagnostic window. This is research telemetry only.
+        try:
+            self.db.record_scan_event(d)
+        except Exception as exc:
+            print(f"[scan-audit] write failed {symbol} {tf}: {type(exc).__name__}: {exc}", flush=True)
 
     def diagnostics_text(self):
         lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
@@ -672,7 +677,7 @@ class Engine:
         lines = [
             '📊 <b>تقرير الأداء التشخيصي حسب الأصل والفريم والاتجاه</b>',
             'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة ذات نتيجة قابلة للحساب فقط.',
-            'كل النتائج بوحدة R قبل التكاليف الفعلية. حساسية 0.05R و0.10R افتراضات وليست رسوم وسيط مؤكدة.',
+            'النتائج بوحدة R قبل السبريد والانزلاق وعمولات الوسيط الفعلية. حساسية 0.05R و0.10R افتراضات وليست رسوم وسيط مؤكدة.',
         ]
         for asset in ASSETS.values():
             symbol = asset['symbol']
@@ -793,10 +798,5 @@ class Engine:
         threading.Thread(
             target=self.monitor,
             name="trade-monitor",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self.paper_scanner,
-            name="btc-paper-trial",
             daemon=True,
         ).start()
