@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import json
 from flask import Flask, jsonify, request
 from config import ASSETS, GOLD_DATA_SYMBOL, TIMEFRAMES, DB_PATH, thresholds_for
 from telegram_ar import Telegram
@@ -93,6 +94,34 @@ def diagnostics():
         'scans': scans,
     })
 
+
+
+@app.get('/scan-audit')
+def scan_audit():
+    """Read-only diagnostics for the ongoing 14-day BUY/SELL investigation."""
+    rows = engine.db.recent_scan_audit(50000)
+    return jsonify({
+        'status': 'ok',
+        'retention_days': 30,
+        'records_returned': len(rows),
+        'scans': [
+            {
+                'symbol': row['symbol'],
+                'timeframe': row['timeframe'],
+                'candle_time': row['candle_time'],
+                'scanned_at': row['scanned_at'],
+                'best_direction': row['best_direction'],
+                'reject_reason': row['reject_reason'],
+                'buy_ai': row['buy_ai'],
+                'sell_ai': row['sell_ai'],
+                'buy_score': row['buy_score'],
+                'sell_score': row['sell_score'],
+                'context_trend': row['context_trend'],
+                'diagnostics': json.loads(row['diagnostics_json']),
+            }
+            for row in rows
+        ],
+    })
 
 @app.post('/lean-backtest/callback')
 def lean_backtest_callback():

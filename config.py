@@ -43,13 +43,6 @@ STRATEGY_LAB_BARS_5M=max(10000,int(os.getenv('STRATEGY_LAB_BARS_5M','20000')))
 STRATEGY_LAB_BARS_15M=max(10000,int(os.getenv('STRATEGY_LAB_BARS_15M','20000')))
 STRATEGY_LAB_BARS_1H=max(10000,int(os.getenv('STRATEGY_LAB_BARS_1H','20000')))
 
-# Isolated seven-day BTC 1h paper-only forward trial; never changes live thresholds.
-PAPER_TRIAL_ID='btc_1h_trend_pullback_score65_ai60_v1'
-PAPER_TRIAL_DAYS=max(1,int(os.getenv('PAPER_TRIAL_DAYS','7')))
-PAPER_MODEL_HISTORY_BARS=max(10000,int(os.getenv('PAPER_MODEL_HISTORY_BARS','20000')))
-PAPER_MIN_SCORE=float(os.getenv('PAPER_MIN_SCORE','65'))
-PAPER_MIN_AI_PROB=float(os.getenv('PAPER_MIN_AI_PROB','0.60'))
-PAPER_FEE_R=float(os.getenv('PAPER_FEE_R','0.05'))
 # Retrain every 1000 candles by default: fewer costly fits while preserving strict chronological walk-forward splits.
 BACKTEST_RETRAIN_EVERY=int(os.getenv('BACKTEST_RETRAIN_EVERY','1000'))
 def thresholds_for(tf, symbol=None):

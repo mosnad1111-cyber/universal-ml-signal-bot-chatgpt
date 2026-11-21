@@ -14,21 +14,8 @@ class Engine:
         self.send = send
         self.db = DB(DB_PATH)
         self.ai = {a['symbol']: GoldAI() for a in ASSETS.values()}
-        # Paper research uses its own model and persistent ledger; live AI/signals stay untouched.
-        self.paper_ai = GoldAI()
-        self.paper_trial_id = PAPER_TRIAL_ID
-        trial_start = self.db.get_setting('paper_trial_start_utc')
-        if not trial_start:
-            trial_start = datetime.now(timezone.utc).isoformat()
-            self.db.set_setting('paper_trial_start_utc', trial_start)
-        trial_end = self.db.get_setting('paper_trial_end_utc')
-        if not trial_end:
-            trial_end = (pd.Timestamp(trial_start) + pd.Timedelta(days=PAPER_TRIAL_DAYS)).isoformat()
-            self.db.set_setting('paper_trial_end_utc', trial_end)
-        self.paper_trial_start_utc = str(trial_start)
-        self.paper_trial_end_utc = str(trial_end)
-        self.paper_last_model = 0.0
-        self.paper_last_train_attempt = 0.0
+        # Retire only the legacy BTC 1h paper experiment; live signals remain untouched.
+        self.db.delete_paper_trial('btc_1h_trend_pullback_score65_ai60_v1')
         self.stop_event = threading.Event()
         self.last_model = 0
         self.last_train_attempt = 0
@@ -116,6 +103,18 @@ class Engine:
             if len(x)<300: diag['reject']='insufficient_feature_bars'; return None
             if tf not in ai.models: diag['reject']='model_not_ready'; return None
             row=x.iloc[-2]; diag['candle_time']=row.name.isoformat(); diag['last_raw_time']=df.index[-1].isoformat()
+            # Preserve the exact decision context so BUY rejections can be
+            # separated into market-regime, model, score, entry-risk and execution causes.
+            for field in ('Open','High','Low','Close','atr','atr_pct','rsi','macd_hist',
+                          'ema20','ema50','ema200','trend_strength','dist_ema20',
+                          'dist_ema50','dist_ema200','vol_ratio','breakout_up','breakout_dn'):
+                if field in row and pd.notna(row[field]):
+                    diag[f'feature_{field.lower()}'] = float(row[field])
+            diag['ctx15_trend'] = int(row.get('ctx15_trend', 0) or 0)
+            diag['ctx1h_trend'] = int(row.get('ctx1h_trend', 0) or 0)
+            diag['return_1'] = float(row.get('ret1', 0) or 0)
+            diag['return_3'] = float(row.get('ret3', 0) or 0)
+            diag['return_6'] = float(row.get('ret6', 0) or 0)
             probs={'BUY':ai.probability(tf,row,'BUY'),'SELL':ai.probability(tf,row,'SELL')}
             diag['buy_ai']=None if probs['BUY'] is None else round(probs['BUY'],4); diag['sell_ai']=None if probs['SELL'] is None else round(probs['SELL'],4)
             ctx=self._context(tf,row.name,symbol); self.last_context[key]=ctx; context={'trend':0}
@@ -151,6 +150,12 @@ class Engine:
         if reason:
             counts=self.reject_counts.setdefault(key,{})
             counts[reason]=counts.get(reason,0)+1
+        # Persist every scan, including rejected BUY/SELL candidates, for the
+        # next 14-day diagnostic window. This is research telemetry only.
+        try:
+            self.db.record_scan_event(d)
+        except Exception as exc:
+            print(f"[scan-audit] write failed {symbol} {tf}: {type(exc).__name__}: {exc}", flush=True)
 
     def diagnostics_text(self):
         lines=['🔎 <b>تشخيص محرك الإشارات</b>','']
@@ -261,303 +266,6 @@ class Engine:
             time.sleep(MONITOR_SECONDS)
 
 
-    def _paper_trial_active(self, now=None):
-        now = pd.Timestamp(now or datetime.now(timezone.utc))
-        start = pd.Timestamp(self.paper_trial_start_utc)
-        end = pd.Timestamp(self.paper_trial_end_utc)
-        return start <= now < end
-
-    def _train_paper_model(self):
-        symbol = ASSETS['BTC']['symbol']
-        history = self._completed(
-            fetch(symbol, '1h', period=PAPER_MODEL_HISTORY_BARS)
-        )
-        x = self._enrich('1h', add_features(history).dropna(), symbol)
-        if len(x) < 1200:
-            raise RuntimeError(
-                f'insufficient_paper_training_bars:{len(x)}; required=1200'
-            )
-        ok = self.paper_ai.fit(
-            '1h', x, RR, divisor=DIVISOR, sl_atr_mult=SL_ATR_MULT,
-            strategy='trend_pullback',
-        )
-        if not ok:
-            raise RuntimeError(
-                self.paper_ai.errors.get('1h', 'paper_model_fit_returned_false')
-            )
-        self.paper_last_model = time.time()
-        self.db.set_setting(
-            'paper_trial_model_trained_at', datetime.now(timezone.utc).isoformat()
-        )
-        info = self.paper_ai.metrics.get('1h', {})
-        print(
-            '[paper-trial] BTC 1h trend_pullback model trained '
-            f"rows={info.get('deployment_training_rows', info.get('training_rows', '-'))} "
-            f"history={len(history)}",
-            flush=True,
-        )
-
-    def _paper_scan(self):
-        if not self._paper_trial_active():
-            return None
-        symbol = ASSETS['BTC']['symbol']
-        if self.db.paper_open(self.paper_trial_id, symbol, '1h'):
-            return None
-        if '1h' not in self.paper_ai.models:
-            return None
-        # Reuse the live scanner's normal 1h cache; 5,000 recent candles are ample for features.
-        # The 20,000-bar fetch is reserved for the initial strategy-specific model fit.
-        df = fetch(symbol, '1h')
-        x = self._enrich('1h', add_features(df).dropna(), symbol)
-        if len(x) < 220:
-            return None
-        row = x.iloc[-2]
-        probabilities = {
-            'BUY': self.paper_ai.probability('1h', row, 'BUY'),
-            'SELL': self.paper_ai.probability('1h', row, 'SELL'),
-        }
-        diagnostics = {}
-        setup = build_setup(
-            x, probabilities, RR, DIVISOR, SL_ATR_MULT,
-            PAPER_MIN_SCORE, PAPER_MIN_AI_PROB,
-            {'trend': 0}, diagnostics=diagnostics,
-            strategy='trend_pullback',
-        )
-        if not setup:
-            return None
-        setup.update({
-            'trial_id': self.paper_trial_id,
-            'symbol': symbol,
-            'timeframe': '1h',
-            'strategy': 'trend_pullback',
-            'candle_time': setup['candle_time'],
-        })
-        source = str(df.attrs.get('market_data_source', '')).strip()
-        if source:
-            self.db.set_setting('paper_trial_data_source', source)
-        trade_id = self.db.paper_create(setup)
-        if trade_id:
-            print(
-                f"[paper-trial] CREATED id={trade_id} direction={setup['direction']} "
-                f"score={setup['score']:.1f} ai={setup['ai_prob']:.3f} "
-                f"entry={setup['entry']} sl={setup['sl']} tp={setup['tp']}",
-                flush=True,
-            )
-        return trade_id
-
-    def _paper_monitor(self):
-        symbol = ASSETS['BTC']['symbol']
-        rows = self.db.paper_all(self.paper_trial_id)
-        open_rows = [row for row in rows if row['status'] in ('WAITING', 'ACTIVE')]
-        if not open_rows:
-            return
-        df = fetch(symbol, '1h')
-        if df is None or len(df) < 2:
-            return
-        completed = df.iloc[:-1]
-        for trade in open_rows:
-            try:
-                if trade['status'] == 'WAITING':
-                    after = pd.Timestamp(trade['candle_time'])
-                    pending = df.loc[df.index > after]
-                    touched = pending[
-                        (pending['Low'] <= float(trade['entry']))
-                        & (pending['High'] >= float(trade['entry']))
-                    ]
-                    if touched.empty:
-                        continue
-                    activation_time = touched.index[0]
-                    self.db.paper_activate(trade['id'], activation_time.isoformat())
-                    if activation_time in completed.index:
-                        bar = completed.loc[activation_time]
-                        outcome = self._activation_bar_exit(
-                            trade['direction'], float(bar['High']), float(bar['Low']),
-                            float(trade['sl']), float(trade['tp']),
-                        )
-                        if outcome:
-                            price = float(trade['sl'] if outcome == 'SL' else trade['tp'])
-                            self.db.paper_close(trade['id'], outcome, price)
-                elif trade['status'] == 'ACTIVE':
-                    activation_time = trade['activation_candle_time']
-                    if not activation_time:
-                        self.db.paper_set_activation_candle(
-                            trade['id'], df.index[-1].isoformat()
-                        )
-                        continue
-                    activation_time = pd.Timestamp(activation_time)
-                    eligible = completed.loc[completed.index >= activation_time]
-                    for candle_time, bar in eligible.iterrows():
-                        outcome = (
-                            self._activation_bar_exit(
-                                trade['direction'], float(bar['High']), float(bar['Low']),
-                                float(trade['sl']), float(trade['tp']),
-                            )
-                            if candle_time == activation_time
-                            else self._bar_exit(
-                                trade['direction'], float(bar['High']), float(bar['Low']),
-                                float(trade['sl']), float(trade['tp']),
-                            )
-                        )
-                        if outcome:
-                            price = float(trade['sl'] if outcome == 'SL' else trade['tp'])
-                            self.db.paper_close(trade['id'], outcome, price)
-                            print(
-                                f"[paper-trial] CLOSED id={trade['id']} result={outcome} "
-                                f"price={price}",
-                                flush=True,
-                            )
-                            break
-            except Exception as exc:
-                print(
-                    f"[paper-trial] MONITOR_ERROR id={trade.get('id')}: "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
-    @staticmethod
-    def _paper_profit_factor(values):
-        gains = sum(max(float(value), 0.0) for value in values)
-        losses = abs(sum(min(float(value), 0.0) for value in values))
-        return gains / losses if losses else (float('inf') if gains else 0.0)
-
-    @staticmethod
-    def _paper_drawdown(values):
-        equity = peak = drawdown = 0.0
-        for value in values:
-            equity += float(value)
-            peak = max(peak, equity)
-            drawdown = max(drawdown, peak - equity)
-        return drawdown
-
-    def paper_trial_text(self):
-        rows = [dict(row) for row in self.db.paper_all(self.paper_trial_id)]
-        closed = sorted(
-            (row for row in rows if row['status'] == 'CLOSED'),
-            key=lambda row: str(row.get('closed_at') or ''),
-        )
-        gross_values = []
-        for trade in closed:
-            risk = abs(float(trade['entry']) - float(trade['sl']))
-            if risk <= 0:
-                continue
-            if trade.get('result') == 'TP':
-                realized = abs(float(trade['tp']) - float(trade['entry'])) / risk
-            elif trade.get('result') == 'SL':
-                realized = -1.0
-            elif trade.get('close_price') is not None:
-                move = (
-                    float(trade['close_price']) - float(trade['entry'])
-                    if trade['direction'] == 'BUY'
-                    else float(trade['entry']) - float(trade['close_price'])
-                )
-                realized = move / risk
-            else:
-                continue
-            gross_values.append(realized)
-        net_005 = [value - PAPER_FEE_R for value in gross_values]
-        net_010 = [value - 0.10 for value in gross_values]
-        waiting = sum(row['status'] == 'WAITING' for row in rows)
-        active = sum(row['status'] == 'ACTIVE' for row in rows)
-        wins = sum(value > 0 for value in net_005)
-        total = len(gross_values)
-        pf = self._paper_profit_factor(net_005)
-        pf_text = '∞' if pf == float('inf') else f'{pf:.2f}'
-        now = pd.Timestamp.now(tz='UTC')
-        end = pd.Timestamp(self.paper_trial_end_utc)
-        status = 'مستمرة' if now < end else 'اكتملت مدة رصد الإشارات'
-        start_text = pd.Timestamp(self.paper_trial_start_utc).strftime('%Y-%m-%d %H:%M UTC')
-        end_text = end.strftime('%Y-%m-%d %H:%M UTC')
-        source = self.db.get_setting(
-            'paper_trial_data_source',
-            'Binance Spot REST BTC/USDT historical klines',
-        )
-        model_trained_at = self.db.get_setting(
-            'paper_trial_model_trained_at', 'غير متاح'
-        )
-        lines = [
-            '🧪 <b>تقرير التجربة الورقية المستقلة — BTC/USDT 1h</b>',
-            f'الحالة: <b>{status}</b>',
-            f'الفترة: {start_text} → {end_text} ({PAPER_TRIAL_DAYS} أيام)',
-            'الاستراتيجية: trend_pullback | Score ≥ 65 | AI ≥ 60%',
-            f'مصدر OHLC: {source}',
-            f'آخر تدريب للنموذج: {model_trained_at}',
-            '',
-            f'الإشارات/الصفقات المسجلة: {len(rows)}',
-            f'بانتظار الدخول: {waiting} | مفعّلة: {active} | مغلقة: {len(closed)}',
-            f'الصفقات المحسومة المستخدمة في القياس: {total}',
-            f'Win Rate بعد تكلفة 0.05R: {(100.0 * wins / total) if total else 0.0:.1f}%',
-            f'Gross: {sum(gross_values):+.2f}R',
-            f'Net بعد تكلفة 0.05R/صفقة: {sum(net_005):+.2f}R',
-            f'Net عند حساسية 0.10R/صفقة: {sum(net_010):+.2f}R',
-            f'Profit Factor بعد 0.05R: {pf_text}',
-            f'Max Drawdown بعد 0.05R: {self._paper_drawdown(net_005):.2f}R',
-            '',
-            '⚠️ هذه محاكاة ورقية داخل البوت باستخدام OHLC؛ لا ترسل أوامر إلى وسيط ولا تستخدم حساب Paper خارجي.',
-            '⚠️ تكلفة 0.05R و0.10R افتراض حساسية وليست سبريد/عمولة وسيط مؤكدة.',
-            'ℹ️ لا تتغير عتبات الإشارات الحية أو سجلها؛ سجل التجربة منفصل تماماً.',
-        ]
-        return '\n'.join(lines)
-
-    def _paper_maybe_send_report(self):
-        now = pd.Timestamp.now(tz='UTC')
-        end = pd.Timestamp(self.paper_trial_end_utc)
-        if now < end or self.db.get_setting('paper_trial_report_sent') == '1':
-            return
-        try:
-            if self.send(self.paper_trial_text()):
-                self.db.set_setting('paper_trial_report_sent', '1')
-                print('[paper-trial] Seven-day summary sent to Telegram.', flush=True)
-        except Exception as exc:
-            print(f'[paper-trial] REPORT_ERROR: {type(exc).__name__}: {exc}', flush=True)
-
-    def paper_scanner(self):
-        symbol = ASSETS['BTC']['symbol']
-        print(
-            f"[paper-trial] Scheduled BTC 1h trend_pullback paper trial "
-            f"from {self.paper_trial_start_utc} to {self.paper_trial_end_utc}; "
-            f"history={PAPER_MODEL_HISTORY_BARS} bars",
-            flush=True,
-        )
-        while not self.stop_event.is_set():
-            now = pd.Timestamp.now(tz='UTC')
-            start = pd.Timestamp(self.paper_trial_start_utc)
-            end = pd.Timestamp(self.paper_trial_end_utc)
-            if start <= now < end:
-                epoch = time.time()
-                retry_ready = epoch - self.paper_last_train_attempt >= 300
-                # Keep one fixed model throughout the seven-day forward sample.
-                if '1h' not in self.paper_ai.models and retry_ready:
-                    self.paper_last_train_attempt = epoch
-                    try:
-                        self._train_paper_model()
-                        self.db.set_setting('paper_trial_model_last_error', '')
-                    except Exception as exc:
-                        self.db.set_setting(
-                            'paper_trial_model_last_error',
-                            f'{type(exc).__name__}: {exc}',
-                        )
-                        print(
-                            f'[paper-trial] MODEL_TRAIN_ERROR: {type(exc).__name__}: {exc}',
-                            flush=True,
-                        )
-                if '1h' in self.paper_ai.models:
-                    try:
-                        self._paper_scan()
-                    except Exception as exc:
-                        print(
-                            f'[paper-trial] SCAN_ERROR: {type(exc).__name__}: {exc}',
-                            flush=True,
-                        )
-            try:
-                self._paper_monitor()
-                self._paper_maybe_send_report()
-            except Exception as exc:
-                print(
-                    f'[paper-trial] LOOP_ERROR: {type(exc).__name__}: {exc}',
-                    flush=True,
-                )
-            self.stop_event.wait(SCAN_SECONDS)
-
     def scanner(self):
         if self.stop_event.wait(15): return
         while not self.stop_event.is_set():
@@ -656,12 +364,23 @@ class Engine:
         return (f"{summary['trades']} صفقة | WR {summary['win_rate']:.1f}% | "
                 f"R الإجمالي {summary['net_r']:+.2f}R | Exp {summary['expectancy']:+.2f}R | Profit Factor {pf_text}")
 
+    @staticmethod
+    def _cost_adjusted_summary(trades, cost_r):
+        adjusted = []
+        for row in trades:
+            item = dict(row)
+            item['_r'] = float(item['_r']) - float(cost_r)
+            adjusted.append(item)
+        return Engine._performance_summary(adjusted)
+
     def stats_text(self):
+        # The report deliberately uses only the most recent 10,000 stored signal
+        # records and excludes WAITING/ACTIVE/CANCELLED rows from performance.
         recent = [dict(row) for row in self.db.recent(10000)]
         lines = [
-            '📊 <b>تقرير الأداء التفصيلي</b>',
-            'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة فقط.',
-            'النتائج بوحدة R قبل السبريد والانزلاق وعمولات الوسيط الفعلية؛ هذه ليست صافي نتيجة وسيط.',
+            '📊 <b>تقرير الأداء التشخيصي حسب الأصل والفريم والاتجاه</b>',
+            'النطاق: آخر 10,000 سجل محفوظ كحد أقصى؛ وتُحتسب الصفقات المغلقة ذات نتيجة قابلة للحساب فقط.',
+            'النتائج بوحدة R قبل السبريد والانزلاق وعمولات الوسيط الفعلية. حساسية 0.05R و0.10R افتراضات وليست رسوم وسيط مؤكدة.',
         ]
         for asset in ASSETS.values():
             symbol = asset['symbol']
@@ -676,8 +395,10 @@ class Engine:
             trades = []
             for row in closed:
                 realized = self._realized_r(row)
-                if realized is not None:
-                    enriched = dict(row); enriched['_r'] = realized; trades.append(enriched)
+                if realized is not None and pd.notna(realized):
+                    enriched = dict(row)
+                    enriched['_r'] = float(realized)
+                    trades.append(enriched)
             overall = self._performance_summary(trades)
             scores = [float(row['score']) for row in trades if row.get('score') is not None]
             probabilities = [float(row['ai_prob']) for row in trades if row.get('ai_prob') is not None]
@@ -689,39 +410,81 @@ class Engine:
                 f'✅ TP: {targets} | ❌ SL: {stops} | ⏳ TIMEOUT: {timeouts}',
                 f"📈 رابحة/خاسرة/تعادل حسب R: {overall['wins']}/{overall['losses']}/{overall['flats']}",
                 f"🎯 نسبة الصفقات ذات R موجب: <b>{overall['win_rate']:.1f}%</b>",
-                f"⚖️ إجمالي R قبل التكاليف: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
+                f"⚖️ إجمالي R: <b>{overall['net_r']:+.2f}R</b> | Expectancy: {overall['expectancy']:+.3f}R/صفقة",
                 f"💰 متوسط الربح: {overall['avg_win']:+.2f}R | متوسط الخسارة: {overall['avg_loss']:+.2f}R | Profit Factor: {pf_text}",
                 f"📉 أقصى تراجع: {overall['max_drawdown']:.2f}R | أطول سلسلة ربح/خسارة: {overall['max_win_streak']}/{overall['max_loss_streak']}",
             ])
-            if scores: lines.append(f'🧮 متوسط Score: {sum(scores) / len(scores):.1f}/100')
-            if probabilities: lines.append(f'🧠 متوسط AI: {sum(probabilities) / len(probabilities) * 100:.1f}%')
+            if scores:
+                lines.append(f'🧮 متوسط Score: {sum(scores) / len(scores):.1f}/100')
+            if probabilities:
+                lines.append(f'🧠 متوسط AI: {sum(probabilities) / len(probabilities) * 100:.1f}%')
+            for cost in (0.05, 0.10):
+                cost_summary = self._cost_adjusted_summary(trades, cost)
+                cost_pf = cost_summary['profit_factor']
+                cost_pf_text = '∞' if cost_pf == float('inf') else f'{cost_pf:.2f}'
+                lines.append(
+                    f"🧾 حساسية تكلفة {cost:.2f}R/صفقة: صافي {cost_summary['net_r']:+.2f}R | "
+                    f"Exp {cost_summary['expectancy']:+.3f}R | PF {cost_pf_text}"
+                )
+
             lines.append('⏱️ <b>تفصيل الفريمات والاتجاهات</b>')
             for tf in TIMEFRAMES:
                 tf_trades = [row for row in trades if row.get('timeframe') == tf]
-                if not tf_trades:
-                    lines.append(f'{tf}: لا توجد صفقات مغلقة.'); continue
                 tf_summary = self._performance_summary(tf_trades)
-                lines.append(f"{tf}: {self._fmt_performance(tf_summary)} | DD {tf_summary['max_drawdown']:.2f}R")
+                lines.append(f"\n<b>{tf}</b>: {self._fmt_performance(tf_summary)} | DD {tf_summary['max_drawdown']:.2f}R")
                 for direction in ('BUY', 'SELL'):
                     directional = [row for row in tf_trades if row.get('direction') == direction]
-                    if directional:
-                        lines.append(f"  {'🟢 شراء' if direction == 'BUY' else '🔴 بيع'}: {self._fmt_performance(self._performance_summary(directional))}")
-            lines.append('🧠 <b>تفاصيل تقييم النموذج حسب الفريم</b>')
+                    summary = self._performance_summary(directional)
+                    label = '🟢 شراء' if direction == 'BUY' else '🔴 بيع'
+                    if not directional:
+                        lines.append(f'  {label}: لا توجد صفقات مغلقة.')
+                        continue
+                    lines.append(f'  {label}: {self._fmt_performance(summary)} | DD {summary["max_drawdown"]:.2f}R')
+                    for cost in (0.05, 0.10):
+                        adjusted = self._cost_adjusted_summary(directional, cost)
+                        adjusted_pf = adjusted['profit_factor']
+                        adjusted_pf_text = '∞' if adjusted_pf == float('inf') else f'{adjusted_pf:.2f}'
+                        lines.append(
+                            f'    بعد تكلفة افتراضية {cost:.2f}R: {adjusted["net_r"]:+.2f}R | '
+                            f'Exp {adjusted["expectancy"]:+.3f}R | PF {adjusted_pf_text}'
+                        )
+                    if len(directional) < 20:
+                        lines.append('    ⚠️ عينة صغيرة؛ لا يُعتمد عليها وحدها لتغيير شروط التداول.')
+
+            lines.append('\n🧠 <b>تشخيص جودة نموذج AI حسب الفريم والاتجاه</b>')
             metrics = ai.info()
             for tf in TIMEFRAMES:
                 value = metrics.get(tf, {})
                 if not value:
-                    lines.append(f"{tf}: ❌ {ai.errors.get(tf, 'بيانات النموذج غير متوفرة')}"); continue
-                auc, accuracy = value.get('auc'), value.get('accuracy')
-                auc_text = f'{float(auc):.3f}' if auc is not None else '—'
-                acc_text = f'{float(accuracy):.3f}' if accuracy is not None else '—'
+                    lines.append(f"{tf}: ❌ {ai.errors.get(tf, 'بيانات النموذج غير متوفرة')}")
+                    continue
+                def metric_text(key):
+                    raw = value.get(key)
+                    return f'{float(raw):.3f}' if raw is not None else '—'
                 training_rows = int(value.get('deployment_training_rows', value.get('training_rows', 0)) or 0)
-                lines.append(f"{tf}: {value.get('engine', '-')} | AUC {auc_text} | Accuracy {acc_text} | تدريب {training_rows:,} صف")
+                lines.append(
+                    f"{tf}: {value.get('engine', '-')} | AUC {metric_text('auc')} | "
+                    f"Accuracy {metric_text('accuracy')} | Precision {metric_text('precision')} | "
+                    f"Recall {metric_text('recall')} | PR-AUC {metric_text('pr_auc')} | "
+                    f"تدريب {training_rows:,} صف"
+                )
                 if value.get('validation_rows') is not None:
-                    lines.append(f"  تحقق: {int(value['validation_rows']):,} صف | إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | دقة خط الأساس {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%")
-                for label, key in (('BUY','buy_auc'),('SELL','sell_auc')):
-                    if value.get(key) is not None: lines.append(f"  AUC {label}: {float(value[key]):.3f}")
-            lines.append('ℹ️ AUC وAccuracy يقيسان عينة تحقق النموذج ولا يمثلان مباشرةً نسبة نجاح الصفقات.')
+                    lines.append(
+                        f"  تحقق: {int(value['validation_rows']):,} صف | "
+                        f"إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | "
+                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%"
+                    )
+                for label, prefix in (('BUY', 'buy'), ('SELL', 'sell')):
+                    rows = value.get(f'{prefix}_validation_rows')
+                    lines.append(
+                        f"  AUC {label}: {metric_text(prefix+'_auc')} | n={int(rows or 0)} | "
+                        f"Precision {metric_text(prefix+'_precision')} | "
+                        f"Recall {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                    )
+            lines.append(
+                'ℹ️ مقاييس AI من عينة التحقق التاريخية وليست نسبة نجاح الصفقات. '
+                'Accuracy تُقرأ بجانب خط الأساس وتوزيع الفئات، ولا تكفي وحدها للحكم.'
+            )
         return '\n'.join(lines)
 
     def start(self):
@@ -738,10 +501,5 @@ class Engine:
         threading.Thread(
             target=self.monitor,
             name="trade-monitor",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self.paper_scanner,
-            name="btc-paper-trial",
             daemon=True,
         ).start()
