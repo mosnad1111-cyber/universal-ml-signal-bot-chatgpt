@@ -225,6 +225,7 @@ class DB:
                 symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,
                 buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+            self._execute(c, "DELETE FROM scan_audit WHERE scanned_at < ?", ((datetime.now(timezone.utc) - __import__('datetime').timedelta(days=30)).isoformat(),))
 
     def delete_paper_trial(self, trial_id):
         """Explicitly retire one paper experiment and its settings; never touches live signals."""
@@ -237,6 +238,12 @@ class DB:
             self._execute(c, "DELETE FROM paper_trades WHERE trial_id=?", (trial_id,))
             for key in keys:
                 self._execute(c, "DELETE FROM settings WHERE key=?", (key,))
+
+    def recent_scan_audit(self, limit=50000):
+        with self.lock, self._conn() as c:
+            return self._execute(
+                c, "SELECT * FROM scan_audit ORDER BY id DESC LIMIT ?", (int(limit),)
+            ).fetchall()
 
     def create(self, s):
         now = datetime.now(timezone.utc).isoformat()
