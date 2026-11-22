@@ -3,7 +3,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, average_precision_score
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, average_precision_score, f1_score
 from config import SIGNAL_LABEL_HORIZON_BARS
 
 warnings.filterwarnings('ignore')
@@ -345,7 +345,7 @@ class GoldAI:
             suffix = f'{cutoff:.2f}'.replace('.', '_')
             metrics[f'thr_{suffix}_precision'] = float(precision_score(yv,pred,zero_division=0))
             metrics[f'thr_{suffix}_recall'] = float(recall_score(yv,pred,zero_division=0))
-            metrics[f'thr_{suffix}_f1'] = float(__import__('sklearn.metrics',fromlist=['f1_score']).f1_score(yv,pred,zero_division=0))
+            metrics[f'thr_{suffix}_f1'] = float(f1_score(yv,pred,zero_division=0))
             metrics[f'thr_{suffix}_predicted_positive_rate'] = float(np.mean(pred))
         # Direction-specific AUC is essential: a combined AUC can hide that
         # BUY and SELL behave very differently, especially on 1H.
