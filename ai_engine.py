@@ -321,34 +321,49 @@ class GoldAI:
 
         pv=model.predict_proba(Xv)[:,1]
         val_direction=val['direction'].to_numpy()
+        default_cutoff = 0.50
+        default_pred = (pv >= default_cutoff).astype(int)
         metrics={
             'engine':engine,'training_rows':int(len(Xtr)),'validation_rows':int(len(Xv)),
             'training_candles':int(len(set(train.index))),'validation_candles':int(len(set(val.index))),'purged_candles':int(purged_candles),
-            'auc':float(roc_auc_score(yv,pv)) if yv.nunique()==2 else 0.5,
-            'accuracy':float(accuracy_score(yv,(pv>=0.5).astype(int))),
-            'precision':float(precision_score(yv,(pv>=0.5).astype(int),zero_division=0)),
-            'recall':float(recall_score(yv,(pv>=0.5).astype(int),zero_division=0)),
+            'auc':float(roc_auc_score(yv,pv)) if yv.nunique()==2 else None,
+            'accuracy':float(accuracy_score(yv,default_pred)),
+            'precision':float(precision_score(yv,default_pred,zero_division=0)),
+            'recall':float(recall_score(yv,default_pred,zero_division=0)),
             'pr_auc':float(average_precision_score(yv,pv)) if yv.nunique()==2 else None,
             'positive_rate':float(ytr.mean()),'validation_positive_rate':float(yv.mean()),
             'validation_baseline_accuracy':float(max(yv.mean(),1-yv.mean())),
             'validation_mean_probability':float(np.mean(pv)),
             'validation_brier':float(np.mean((pv-yv.to_numpy())**2)),
+            'reported_classification_cutoff':default_cutoff,
         }
+        # Report threshold sensitivity explicitly; production thresholds are
+        # configured separately and must not be implied by this diagnostic grid.
+        threshold_grid = (0.30, 0.40, 0.50, 0.60)
+        for cutoff in threshold_grid:
+            pred = (pv >= cutoff).astype(int)
+            suffix = f'{cutoff:.2f}'.replace('.', '_')
+            metrics[f'thr_{suffix}_precision'] = float(precision_score(yv,pred,zero_division=0))
+            metrics[f'thr_{suffix}_recall'] = float(recall_score(yv,pred,zero_division=0))
+            metrics[f'thr_{suffix}_f1'] = float(__import__('sklearn.metrics',fromlist=['f1_score']).f1_score(yv,pred,zero_division=0))
+            metrics[f'thr_{suffix}_predicted_positive_rate'] = float(np.mean(pred))
         # Direction-specific AUC is essential: a combined AUC can hide that
         # BUY and SELL behave very differently, especially on 1H.
         for d, name in ((1,'buy'),(0,'sell')):
             mask=val_direction==d
-            if mask.sum() >= 10 and yv.iloc[mask].nunique()==2:
-                metrics[f'{name}_auc']=float(roc_auc_score(yv.iloc[mask],pv[mask]))
+            direction_truth = yv.iloc[mask]
+            direction_prob = pv[mask]
+            metrics[f'{name}_auc'] = float(roc_auc_score(direction_truth,direction_prob)) if mask.sum() >= 10 and direction_truth.nunique()==2 else None
             metrics[f'{name}_validation_rows']=int(mask.sum())
-            if mask.sum():
-                direction_truth = yv.iloc[mask]
-                direction_prob = pv[mask]
-                direction_pred = (direction_prob >= 0.5).astype(int)
-                metrics[f'{name}_precision'] = float(precision_score(direction_truth,direction_pred,zero_division=0))
-                metrics[f'{name}_recall'] = float(recall_score(direction_truth,direction_pred,zero_division=0))
-                metrics[f'{name}_pr_auc'] = float(average_precision_score(direction_truth,direction_prob)) if direction_truth.nunique()==2 else None
-            metrics[f'{name}_positive_rate']=float(yv.iloc[mask].mean()) if mask.sum() else 0.0
+            metrics[f'{name}_positive_rate']=float(direction_truth.mean()) if mask.sum() else None
+            metrics[f'{name}_baseline_accuracy']=float(max(direction_truth.mean(),1-direction_truth.mean())) if mask.sum() else None
+            metrics[f'{name}_pr_auc'] = float(average_precision_score(direction_truth,direction_prob)) if mask.sum() and direction_truth.nunique()==2 else None
+            for cutoff in threshold_grid:
+                suffix = f'{cutoff:.2f}'.replace('.', '_')
+                direction_pred = (direction_prob >= cutoff).astype(int)
+                metrics[f'{name}_thr_{suffix}_precision'] = float(precision_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
+                metrics[f'{name}_thr_{suffix}_recall'] = float(recall_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
+                metrics[f'{name}_thr_{suffix}_predicted_positive_rate'] = float(np.mean(direction_pred)) if mask.sum() else None
 
         # Keep the chronological holdout metrics above untouched, but refit the
         # deployment model on every label that is already fully observable at this
