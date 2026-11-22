@@ -173,8 +173,9 @@ class Engine:
         except Exception as exc:
             print(f'[scan-audit] pending read failed {symbol} {timeframe}: {type(exc).__name__}: {exc}', flush=True)
             return
-        for item in pending:
+        for raw_item in pending:
             try:
+                item = dict(raw_item)
                 signal_time = pd.Timestamp(item['candle_time'])
                 pos = completed.index.get_indexer([signal_time])[0]
                 if pos < 0:
