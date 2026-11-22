@@ -554,16 +554,18 @@ class Engine:
                     rows = value.get(f'{prefix}_validation_rows')
                     lines.append(
                         f"  AUC {label}: {metric_text(prefix+'_auc')} | n={int(rows or 0)} | "
-                        f"إيجابي {metric_text(prefix+'_positive_rate')} | "
-                        f"Precision@0.50 {metric_text(prefix+'_precision')} | "
-                        f"Recall@0.50 {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                        f"إيجابي {float(value.get(prefix+'_positive_rate') or 0.0)*100:.1f}% | "
+                        f"خط أساس {float(value.get(prefix+'_baseline_accuracy') or 0.0)*100:.1f}% | "
+                        f"Precision@0.50 {metric_text(prefix+'_thr_0_50_precision')} | "
+                        f"Recall@0.50 {metric_text(prefix+'_thr_0_50_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
                     )
                     for cutoff in (0.30, 0.40, 0.50, 0.60):
                         suffix = f'{cutoff:.2f}'.replace('.', '_')
                         lines.append(
                             f"    عتبة {cutoff:.0%}: Precision {metric_text(prefix+'_thr_'+suffix+'_precision')} | "
                             f"Recall {metric_text(prefix+'_thr_'+suffix+'_recall')} | "
-                            f"نسبة التوقع الإيجابي {metric_text(prefix+'_thr_'+suffix+'_predicted_positive_rate')}"
+                            f"F1 {metric_text(prefix+'_thr_'+suffix+'_f1')} | "
+                            f"توقع إيجابي {float(value.get(prefix+'_thr_'+suffix+'_predicted_positive_rate') or 0.0)*100:.1f}%"
                         )
             lines.append(
                 'ℹ️ مقاييس AI من عينة التحقق التاريخية وليست نسبة نجاح الصفقات. '
