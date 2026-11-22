@@ -188,7 +188,9 @@ class Engine:
                     sl = float(item[f'{prefix}_sl']); tp = float(item[f'{prefix}_tp']); entry = float(entry)
                     activated = False
                     outcome = None
+                    evaluated = 0
                     for _, bar in future.iterrows():
+                        evaluated += 1
                         high = float(bar['High']); low = float(bar['Low'])
                         if not activated:
                             if low <= entry <= high:
@@ -209,7 +211,7 @@ class Engine:
                     if outcome is None and len(future) >= horizon:
                         outcome = 'TIMEOUT' if activated else 'NO_ENTRY'
                     if outcome is not None:
-                        self.db.resolve_scan_audit_candidate(item['id'], direction, outcome, len(future))
+                        self.db.resolve_scan_audit_candidate(item['id'], direction, outcome, evaluated)
             except Exception as exc:
                 print(f"[scan-audit] resolve failed id={item.get('id')}: {type(exc).__name__}: {exc}", flush=True)
 
