@@ -363,6 +363,7 @@ class GoldAI:
                 direction_pred = (direction_prob >= cutoff).astype(int)
                 metrics[f'{name}_thr_{suffix}_precision'] = float(precision_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
                 metrics[f'{name}_thr_{suffix}_recall'] = float(recall_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
+                metrics[f'{name}_thr_{suffix}_f1'] = float(f1_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
                 metrics[f'{name}_thr_{suffix}_predicted_positive_rate'] = float(np.mean(direction_pred)) if mask.sum() else None
 
         # Keep the chronological holdout metrics above untouched, but refit the
