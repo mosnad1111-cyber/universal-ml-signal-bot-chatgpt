@@ -532,26 +532,36 @@ class Engine:
                 def metric_text(key):
                     raw = value.get(key)
                     return f'{float(raw):.3f}' if raw is not None else '—'
-                training_rows = int(value.get('deployment_training_rows', value.get('training_rows', 0)) or 0)
+                training_rows = int(value.get('training_rows', 0) or 0)
+                deployment_rows = int(value.get('deployment_training_rows', training_rows) or 0)
                 lines.append(
                     f"{tf}: {value.get('engine', '-')} | AUC {metric_text('auc')} | "
                     f"Accuracy {metric_text('accuracy')} | Precision {metric_text('precision')} | "
                     f"Recall {metric_text('recall')} | PR-AUC {metric_text('pr_auc')} | "
-                    f"تدريب {training_rows:,} صف"
+                    f"تدريب للتحقق {training_rows:,} | إعادة تدريب نهائية {deployment_rows:,}"
                 )
                 if value.get('validation_rows') is not None:
                     lines.append(
                         f"  تحقق: {int(value['validation_rows']):,} صف | "
                         f"إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | "
-                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%"
+                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}% | "
+                        f"مقاييس التصنيف عند عتبة 50%"
                     )
                 for label, prefix in (('BUY', 'buy'), ('SELL', 'sell')):
                     rows = value.get(f'{prefix}_validation_rows')
                     lines.append(
                         f"  AUC {label}: {metric_text(prefix+'_auc')} | n={int(rows or 0)} | "
-                        f"Precision {metric_text(prefix+'_precision')} | "
-                        f"Recall {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                        f"إيجابي {metric_text(prefix+'_positive_rate')} | "
+                        f"Precision@0.50 {metric_text(prefix+'_precision')} | "
+                        f"Recall@0.50 {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
                     )
+                    for cutoff in (0.30, 0.40, 0.50, 0.60):
+                        suffix = f'{cutoff:.2f}'.replace('.', '_')
+                        lines.append(
+                            f"    عتبة {cutoff:.0%}: Precision {metric_text(prefix+'_thr_'+suffix+'_precision')} | "
+                            f"Recall {metric_text(prefix+'_thr_'+suffix+'_recall')} | "
+                            f"نسبة التوقع الإيجابي {metric_text(prefix+'_thr_'+suffix+'_predicted_positive_rate')}"
+                        )
             lines.append(
                 'ℹ️ مقاييس AI من عينة التحقق التاريخية وليست نسبة نجاح الصفقات. '
                 'Accuracy تُقرأ بجانب خط الأساس وتوزيع الفئات، ولا تكفي وحدها للحكم.'
