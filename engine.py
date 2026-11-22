@@ -122,6 +122,26 @@ class Engine:
                 t15=ctx.get('15m',{}).get('trend',0); t1h=ctx.get('1h',{}).get('trend',0); context['trend']=1 if t15>0 and t1h>0 else (-1 if t15<0 and t1h<0 else 0)
             elif tf=='15m': context['trend']=ctx.get('1h',{}).get('trend',0)
             diag['context_trend']=context['trend']
+
+            # Build both directional shadow candidates independently of live
+            # acceptance filters. These are research-only and never create trades.
+            shadow = {}
+            for shadow_direction in ('BUY', 'SELL'):
+                shadow_probs = {shadow_direction: probs.get(shadow_direction)}
+                shadow_diag = {}
+                candidate = build_setup(
+                    x, shadow_probs, RR, DIVISOR, SL_ATR_MULT,
+                    0, 0, {'trend': 0}, diagnostics=shadow_diag, min_gap=0
+                )
+                if candidate:
+                    shadow[shadow_direction] = {
+                        'entry': float(candidate['entry']), 'sl': float(candidate['sl']),
+                        'tp': float(candidate['tp']), 'score': float(candidate['score']),
+                        'ai_prob': float(candidate['ai_prob']),
+                    }
+            diag['shadow_candidates'] = shadow
+            self._evaluate_pending_scan_audit(symbol, tf, x)
+
             min_score, min_ai=self._thresholds(tf, symbol); diag['min_score_required']=min_score; diag['min_ai_required']=min_ai
             setup=build_setup(x,probs,RR,DIVISOR,SL_ATR_MULT,min_score,min_ai,context,diagnostics=diag)
             if not setup: self.last_diagnostics[key]=diag; return None
@@ -141,6 +161,60 @@ class Engine:
             diag['accepted']=True; diag['telegram_sent']=True; self.last_diagnostics[key]=diag; return setup
         except Exception as exc:
             diag['reject']=f'exception:{type(exc).__name__}:{exc}'; self.last_diagnostics[key]=diag; raise
+
+    def _evaluate_pending_scan_audit(self, symbol, timeframe, frame):
+        """Resolve research-only shadow candidates using completed OHLC bars."""
+        horizon = max(1, int(SIGNAL_LABEL_HORIZON_BARS))
+        completed = frame.iloc[:-1] if len(frame) > 1 else frame.iloc[0:0]
+        if completed.empty:
+            return
+        try:
+            pending = self.db.pending_scan_audit(symbol, timeframe, 2000)
+        except Exception as exc:
+            print(f'[scan-audit] pending read failed {symbol} {timeframe}: {type(exc).__name__}: {exc}', flush=True)
+            return
+        for raw_item in pending:
+            try:
+                item = dict(raw_item)
+                signal_time = pd.Timestamp(item['candle_time'])
+                pos = completed.index.get_indexer([signal_time])[0]
+                if pos < 0:
+                    continue
+                future = completed.iloc[pos + 1:pos + 1 + horizon]
+                for direction in ('BUY', 'SELL'):
+                    prefix = direction.lower()
+                    entry = item.get(f'{prefix}_entry')
+                    if entry is None or item.get(f'{prefix}_outcome') is not None:
+                        continue
+                    sl = float(item[f'{prefix}_sl']); tp = float(item[f'{prefix}_tp']); entry = float(entry)
+                    activated = False
+                    outcome = None
+                    evaluated = 0
+                    for _, bar in future.iterrows():
+                        evaluated += 1
+                        high = float(bar['High']); low = float(bar['Low'])
+                        if not activated:
+                            if low <= entry <= high:
+                                activated = True
+                                # Entry/exit ordering inside one OHLC bar is unknowable.
+                                if (low <= sl if direction == 'BUY' else high >= sl) or (high >= tp if direction == 'BUY' else low <= tp):
+                                    outcome = 'SL'
+                                    break
+                            continue
+                        hit_sl = low <= sl if direction == 'BUY' else high >= sl
+                        hit_tp = high >= tp if direction == 'BUY' else low <= tp
+                        if hit_sl:
+                            outcome = 'SL'
+                            break
+                        if hit_tp:
+                            outcome = 'TP'
+                            break
+                    if outcome is None and len(future) >= horizon:
+                        outcome = 'TIMEOUT' if activated else 'NO_ENTRY'
+                    if outcome is not None:
+                        self.db.resolve_scan_audit_candidate(item['id'], direction, outcome, evaluated)
+            except Exception as exc:
+                print(f"[scan-audit] resolve failed id={item.get('id')}: {type(exc).__name__}: {exc}", flush=True)
 
     def _record_scan_outcome(self, tf, symbol=GOLD_DATA_SYMBOL):
         key=f'{symbol}|{tf}'
@@ -461,26 +535,38 @@ class Engine:
                 def metric_text(key):
                     raw = value.get(key)
                     return f'{float(raw):.3f}' if raw is not None else '—'
-                training_rows = int(value.get('deployment_training_rows', value.get('training_rows', 0)) or 0)
+                training_rows = int(value.get('training_rows', 0) or 0)
+                deployment_rows = int(value.get('deployment_training_rows', training_rows) or 0)
                 lines.append(
                     f"{tf}: {value.get('engine', '-')} | AUC {metric_text('auc')} | "
                     f"Accuracy {metric_text('accuracy')} | Precision {metric_text('precision')} | "
                     f"Recall {metric_text('recall')} | PR-AUC {metric_text('pr_auc')} | "
-                    f"تدريب {training_rows:,} صف"
+                    f"تدريب للتحقق {training_rows:,} | إعادة تدريب نهائية {deployment_rows:,}"
                 )
                 if value.get('validation_rows') is not None:
                     lines.append(
                         f"  تحقق: {int(value['validation_rows']):,} صف | "
                         f"إيجابي {float(value.get('validation_positive_rate', 0.0))*100:.1f}% | "
-                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}%"
+                        f"خط أساس Accuracy {float(value.get('validation_baseline_accuracy', 0.0))*100:.1f}% | "
+                        f"مقاييس التصنيف عند عتبة 50%"
                     )
                 for label, prefix in (('BUY', 'buy'), ('SELL', 'sell')):
                     rows = value.get(f'{prefix}_validation_rows')
                     lines.append(
                         f"  AUC {label}: {metric_text(prefix+'_auc')} | n={int(rows or 0)} | "
-                        f"Precision {metric_text(prefix+'_precision')} | "
-                        f"Recall {metric_text(prefix+'_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                        f"إيجابي {float(value.get(prefix+'_positive_rate') or 0.0)*100:.1f}% | "
+                        f"خط أساس {float(value.get(prefix+'_baseline_accuracy') or 0.0)*100:.1f}% | "
+                        f"Precision@0.50 {metric_text(prefix+'_thr_0_50_precision')} | "
+                        f"Recall@0.50 {metric_text(prefix+'_thr_0_50_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
                     )
+                    for cutoff in (0.30, 0.40, 0.50, 0.60):
+                        suffix = f'{cutoff:.2f}'.replace('.', '_')
+                        lines.append(
+                            f"    عتبة {cutoff:.0%}: Precision {metric_text(prefix+'_thr_'+suffix+'_precision')} | "
+                            f"Recall {metric_text(prefix+'_thr_'+suffix+'_recall')} | "
+                            f"F1 {metric_text(prefix+'_thr_'+suffix+'_f1')} | "
+                            f"توقع إيجابي {float(value.get(prefix+'_thr_'+suffix+'_predicted_positive_rate') or 0.0)*100:.1f}%"
+                        )
             lines.append(
                 'ℹ️ مقاييس AI من عينة التحقق التاريخية وليست نسبة نجاح الصفقات. '
                 'Accuracy تُقرأ بجانب خط الأساس وتوزيع الفئات، ولا تكفي وحدها للحكم.'
