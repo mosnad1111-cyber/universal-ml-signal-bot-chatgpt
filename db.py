@@ -114,9 +114,19 @@ class DB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, timeframe TEXT NOT NULL,
                 candle_time TEXT, scanned_at TEXT NOT NULL, best_direction TEXT, reject_reason TEXT,
                 buy_ai REAL, sell_ai REAL, buy_score REAL, sell_score REAL, context_trend INTEGER,
-                diagnostics_json TEXT NOT NULL);
-                CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at);"""
+                diagnostics_json TEXT NOT NULL,
+                buy_entry REAL, buy_sl REAL, buy_tp REAL, sell_entry REAL, sell_sl REAL, sell_tp REAL,
+                buy_outcome TEXT, sell_outcome TEXT, buy_evaluated_bars INTEGER DEFAULT 0, sell_evaluated_bars INTEGER DEFAULT 0);
+                CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at);
+                CREATE INDEX IF NOT EXISTS idx_scan_audit_scanned_at ON scan_audit(scanned_at);"""
             )
+            audit_cols = {r[1] for r in c.execute("PRAGMA table_info(scan_audit)")}
+            for col, typ in (("buy_entry","REAL"),("buy_sl","REAL"),("buy_tp","REAL"),("sell_entry","REAL"),("sell_sl","REAL"),("sell_tp","REAL"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0")):
+                if col not in audit_cols:
+                    c.execute(f"ALTER TABLE scan_audit ADD COLUMN {col} {typ}")
+            c.execute("UPDATE scan_audit SET candle_time='' WHERE candle_time IS NULL")
+            c.execute("DELETE FROM scan_audit WHERE id NOT IN (SELECT MAX(id) FROM scan_audit GROUP BY symbol,timeframe,candle_time)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_scan_audit_candle ON scan_audit(symbol,timeframe,candle_time)")
             cols = {r[1] for r in c.execute("PRAGMA table_info(signals)")}
             if "features_json" not in cols:
                 c.execute("ALTER TABLE signals ADD COLUMN features_json TEXT")
@@ -187,9 +197,19 @@ class DB:
                 id BIGSERIAL PRIMARY KEY, symbol TEXT NOT NULL, timeframe TEXT NOT NULL,
                 candle_time TEXT, scanned_at TEXT NOT NULL, best_direction TEXT, reject_reason TEXT,
                 buy_ai DOUBLE PRECISION, sell_ai DOUBLE PRECISION, buy_score DOUBLE PRECISION,
-                sell_score DOUBLE PRECISION, context_trend INTEGER, diagnostics_json TEXT NOT NULL
+                sell_score DOUBLE PRECISION, context_trend INTEGER, diagnostics_json TEXT NOT NULL,
+                buy_entry DOUBLE PRECISION, buy_sl DOUBLE PRECISION, buy_tp DOUBLE PRECISION,
+                sell_entry DOUBLE PRECISION, sell_sl DOUBLE PRECISION, sell_tp DOUBLE PRECISION,
+                buy_outcome TEXT, sell_outcome TEXT, buy_evaluated_bars INTEGER DEFAULT 0,
+                sell_evaluated_bars INTEGER DEFAULT 0
             )""")
+            for col, typ in (("buy_entry","DOUBLE PRECISION"),("buy_sl","DOUBLE PRECISION"),("buy_tp","DOUBLE PRECISION"),("sell_entry","DOUBLE PRECISION"),("sell_sl","DOUBLE PRECISION"),("sell_tp","DOUBLE PRECISION"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0")):
+                c.execute(f"ALTER TABLE scan_audit ADD COLUMN IF NOT EXISTS {col} {typ}")
+            c.execute("UPDATE scan_audit SET candle_time='' WHERE candle_time IS NULL")
+            c.execute("DELETE FROM scan_audit a USING scan_audit b WHERE a.symbol=b.symbol AND a.timeframe=b.timeframe AND a.candle_time=b.candle_time AND a.id < b.id")
             c.execute("CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_scan_audit_scanned_at ON scan_audit(scanned_at)")
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_scan_audit_candle ON scan_audit(symbol,timeframe,candle_time)")
             c.execute(
                 "ALTER TABLE signals ADD COLUMN IF NOT EXISTS features_json TEXT"
             )
@@ -206,26 +226,95 @@ class DB:
 
 
     def record_scan_event(self, diagnostic):
-        """Persist a compact audit row for accepted and rejected scan attempts."""
+        """Upsert one audit snapshot per completed market candle."""
+        candle_time = str(diagnostic.get("candle_time") or "")
+        if not candle_time:
+            return None
         now = datetime.now(timezone.utc).isoformat()
         payload = json.dumps(diagnostic, ensure_ascii=False, default=str)
+        candidates = diagnostic.get("shadow_candidates") or {}
+        buy = candidates.get("BUY") or {}
+        sell = candidates.get("SELL") or {}
         values = (
             str(diagnostic.get("symbol", "")), str(diagnostic.get("timeframe", "")),
-            str(diagnostic.get("candle_time") or ""), now,
-            str(diagnostic.get("best_direction") or ""),
+            candle_time, now, str(diagnostic.get("best_direction") or ""),
             str(diagnostic.get("reject") or ""),
             float(diagnostic["buy_ai"]) if diagnostic.get("buy_ai") is not None else None,
             float(diagnostic["sell_ai"]) if diagnostic.get("sell_ai") is not None else None,
             float(diagnostic["buy_score"]) if diagnostic.get("buy_score") is not None else None,
             float(diagnostic["sell_score"]) if diagnostic.get("sell_score") is not None else None,
             int(diagnostic.get("context_trend", 0) or 0), payload,
+            buy.get("entry"), buy.get("sl"), buy.get("tp"),
+            sell.get("entry"), sell.get("sl"), sell.get("tp"),
         )
+        columns = """symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,
+            buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json,
+            buy_entry,buy_sl,buy_tp,sell_entry,sell_sl,sell_tp"""
+        placeholders = ",".join(["?"] * 18)
+        updates = """scanned_at=excluded.scanned_at,best_direction=excluded.best_direction,
+            reject_reason=excluded.reject_reason,buy_ai=excluded.buy_ai,sell_ai=excluded.sell_ai,
+            buy_score=excluded.buy_score,sell_score=excluded.sell_score,
+            context_trend=excluded.context_trend,diagnostics_json=excluded.diagnostics_json,
+            buy_entry=COALESCE(scan_audit.buy_entry,excluded.buy_entry),
+            buy_sl=COALESCE(scan_audit.buy_sl,excluded.buy_sl),buy_tp=COALESCE(scan_audit.buy_tp,excluded.buy_tp),
+            sell_entry=COALESCE(scan_audit.sell_entry,excluded.sell_entry),
+            sell_sl=COALESCE(scan_audit.sell_sl,excluded.sell_sl),sell_tp=COALESCE(scan_audit.sell_tp,excluded.sell_tp)"""
         with self.lock, self._conn() as c:
-            self._execute(c, """INSERT INTO scan_audit(
-                symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,
-                buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", values)
-            self._execute(c, "DELETE FROM scan_audit WHERE scanned_at < ?", ((datetime.now(timezone.utc) - __import__('datetime').timedelta(days=30)).isoformat(),))
+            self._execute(c, f"INSERT INTO scan_audit({columns}) VALUES({placeholders}) ON CONFLICT(symbol,timeframe,candle_time) DO UPDATE SET {updates}", values)
+            cutoff = (datetime.now(timezone.utc) - __import__('datetime').timedelta(days=30)).isoformat()
+            self._execute(c, "DELETE FROM scan_audit WHERE scanned_at < ?", (cutoff,))
+
+    def pending_scan_audit(self, symbol, timeframe, limit=2000):
+        with self.lock, self._conn() as c:
+            return self._execute(c, """SELECT * FROM scan_audit
+                WHERE symbol=? AND timeframe=? AND
+                ((buy_entry IS NOT NULL AND buy_outcome IS NULL) OR
+                 (sell_entry IS NOT NULL AND sell_outcome IS NULL))
+                ORDER BY candle_time LIMIT ?""", (symbol, timeframe, int(limit))).fetchall()
+
+    def resolve_scan_audit_candidate(self, row_id, direction, outcome, evaluated_bars):
+        direction = str(direction).lower()
+        if direction not in ("buy", "sell"):
+            raise ValueError("direction must be BUY or SELL")
+        with self.lock, self._conn() as c:
+            self._execute(c, f"""UPDATE scan_audit SET {direction}_outcome=?,
+                {direction}_evaluated_bars=? WHERE id=? AND {direction}_outcome IS NULL""",
+                (str(outcome), int(evaluated_bars), int(row_id)))
+
+    def scan_audit_page(self, since=None, until=None, limit=1000, before_id=None):
+        clauses = []
+        params = []
+        if since:
+            clauses.append("scanned_at >= ?"); params.append(str(since))
+        if until:
+            clauses.append("scanned_at <= ?"); params.append(str(until))
+        if before_id is not None:
+            clauses.append("id < ?"); params.append(int(before_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(int(limit), 5000)))
+        with self.lock, self._conn() as c:
+            return self._execute(c, f"SELECT * FROM scan_audit{where} ORDER BY id DESC LIMIT ?", params).fetchall()
+
+    def scan_audit_summary(self, since=None, until=None):
+        clauses = []
+        params = []
+        if since:
+            clauses.append("scanned_at >= ?"); params.append(str(since))
+        if until:
+            clauses.append("scanned_at <= ?"); params.append(str(until))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self.lock, self._conn() as c:
+            return self._execute(c, f"""SELECT symbol,timeframe,
+                COUNT(*) AS candles,
+                SUM(CASE WHEN buy_outcome='TP' THEN 1 ELSE 0 END) AS buy_tp,
+                SUM(CASE WHEN buy_outcome='SL' THEN 1 ELSE 0 END) AS buy_sl,
+                SUM(CASE WHEN buy_outcome='NO_ENTRY' THEN 1 ELSE 0 END) AS buy_no_entry,
+                SUM(CASE WHEN buy_outcome='TIMEOUT' THEN 1 ELSE 0 END) AS buy_timeout,
+                SUM(CASE WHEN sell_outcome='TP' THEN 1 ELSE 0 END) AS sell_tp,
+                SUM(CASE WHEN sell_outcome='SL' THEN 1 ELSE 0 END) AS sell_sl,
+                SUM(CASE WHEN sell_outcome='NO_ENTRY' THEN 1 ELSE 0 END) AS sell_no_entry,
+                SUM(CASE WHEN sell_outcome='TIMEOUT' THEN 1 ELSE 0 END) AS sell_timeout
+                FROM scan_audit{where} GROUP BY symbol,timeframe ORDER BY symbol,timeframe""", params).fetchall()
 
     def delete_paper_trial(self, trial_id):
         """Explicitly retire one paper experiment and its settings; never touches live signals."""
