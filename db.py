@@ -230,7 +230,8 @@ class DB:
         candle_time = str(diagnostic.get("candle_time") or "")
         if not candle_time:
             return None
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
         payload = json.dumps(diagnostic, ensure_ascii=False, default=str)
         candidates = diagnostic.get("shadow_candidates") or {}
         buy = candidates.get("BUY") or {}
@@ -261,8 +262,12 @@ class DB:
             sell_sl=COALESCE(scan_audit.sell_sl,excluded.sell_sl),sell_tp=COALESCE(scan_audit.sell_tp,excluded.sell_tp)"""
         with self.lock, self._conn() as c:
             self._execute(c, f"INSERT INTO scan_audit({columns}) VALUES({placeholders}) ON CONFLICT(symbol,timeframe,candle_time) DO UPDATE SET {updates}", values)
-            cutoff = (datetime.now(timezone.utc) - __import__('datetime').timedelta(days=30)).isoformat()
-            self._execute(c, "DELETE FROM scan_audit WHERE scanned_at < ?", (cutoff,))
+            cleanup = self._execute(c, "SELECT value FROM settings WHERE key=?", ("scan_audit_cleanup_at",)).fetchone()
+            cleanup_due = not cleanup or str(cleanup["value"]) < (now_dt - __import__('datetime').timedelta(days=1)).isoformat()
+            if cleanup_due:
+                cutoff = (now_dt - __import__('datetime').timedelta(days=30)).isoformat()
+                self._execute(c, "DELETE FROM scan_audit WHERE scanned_at < ?", (cutoff,))
+                self._execute(c, "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", ("scan_audit_cleanup_at", now))
 
     def pending_scan_audit(self, symbol, timeframe, limit=2000):
         with self.lock, self._conn() as c:
@@ -306,6 +311,12 @@ class DB:
         with self.lock, self._conn() as c:
             return self._execute(c, f"""SELECT symbol,timeframe,
                 COUNT(*) AS candles,
+                SUM(CASE WHEN reject_reason='' THEN 1 ELSE 0 END) AS accepted_scans,
+                SUM(CASE WHEN reject_reason<>'' THEN 1 ELSE 0 END) AS rejected_scans,
+                SUM(CASE WHEN buy_entry IS NOT NULL THEN 1 ELSE 0 END) AS buy_candidates,
+                SUM(CASE WHEN sell_entry IS NOT NULL THEN 1 ELSE 0 END) AS sell_candidates,
+                SUM(CASE WHEN buy_entry IS NOT NULL AND buy_outcome IS NULL THEN 1 ELSE 0 END) AS buy_pending,
+                SUM(CASE WHEN sell_entry IS NOT NULL AND sell_outcome IS NULL THEN 1 ELSE 0 END) AS sell_pending,
                 SUM(CASE WHEN buy_outcome='TP' THEN 1 ELSE 0 END) AS buy_tp,
                 SUM(CASE WHEN buy_outcome='SL' THEN 1 ELSE 0 END) AS buy_sl,
                 SUM(CASE WHEN buy_outcome='NO_ENTRY' THEN 1 ELSE 0 END) AS buy_no_entry,
