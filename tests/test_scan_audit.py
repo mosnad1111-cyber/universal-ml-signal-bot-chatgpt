@@ -54,6 +54,27 @@ class ScanAuditIntegrityTests(unittest.TestCase):
         self.assertEqual(summary[0]["buy_tp"], 1)
         self.assertEqual(summary[0]["sell_sl"], 1)
 
+    def test_legacy_duplicate_rows_are_deduplicated_on_migration(self):
+        import sqlite3
+        legacy_path = os.path.join(self.tmp.name, "legacy.sqlite3")
+        conn = sqlite3.connect(legacy_path)
+        conn.execute("""CREATE TABLE scan_audit(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL, candle_time TEXT, scanned_at TEXT NOT NULL,
+            best_direction TEXT, reject_reason TEXT, buy_ai REAL, sell_ai REAL,
+            buy_score REAL, sell_score REAL, context_trend INTEGER,
+            diagnostics_json TEXT NOT NULL)""")
+        base = ("BINANCE:BTCUSDT", "5m", "2026-11-22T10:00:00", "2026-11-22T10:00:01",
+                "BUY", "", 0.6, 0.4, 70.0, 50.0, 1, "{}")
+        conn.execute("INSERT INTO scan_audit(symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", base)
+        newer = list(base); newer[3] = "2026-11-22T10:00:02"; newer[8] = 71.0
+        conn.execute("INSERT INTO scan_audit(symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", tuple(newer))
+        conn.commit(); conn.close()
+        migrated = DB(legacy_path)
+        rows = migrated.scan_audit_page(limit=10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["buy_score"], 71.0)
+
     def test_pagination_cursor(self):
         first = self.sample("first", 61.0)
         first["candle_time"] = "2026-11-22T10:00:00"
