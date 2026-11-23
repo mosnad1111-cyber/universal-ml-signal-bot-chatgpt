@@ -403,6 +403,7 @@ def _simulate_trade(
     target = float(candidate["target"])
     risk = float(candidate["risk"])
     last_session_i = None
+    exit_i = exit_price = result = None
 
     for i in range(entry_i, len(frame)):
         row = frame.iloc[i]
