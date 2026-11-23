@@ -482,7 +482,7 @@ def _metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     if not trades:
         return {
             "trades": 0, "wins": 0, "losses": 0, "breakeven": 0,
-            "win_rate_pct": None, "gross_r": 0.0,
+            "win_rate_pct": None, "net_win_rate_cost_005_pct": None, "gross_r": 0.0,
             "net_r_cost_000": 0.0, "net_r_cost_005": 0.0, "net_r_cost_010": 0.0,
             "expectancy_r_cost_005": None, "profit_factor_cost_005": None,
             "max_drawdown_r_cost_005": 0.0, "avg_minutes_held": None,
@@ -493,7 +493,7 @@ def _metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     def profit_factor(values: np.ndarray) -> float | None:
         gains = float(values[values > 0].sum())
         losses = abs(float(values[values < 0].sum()))
-        return round(gains / losses, 4) if losses > 0 else (None if gains == 0 else None)
+        return round(gains / losses, 4) if losses > 0 else ("∞" if gains > 0 else None)
     def max_drawdown(values: np.ndarray) -> float:
         equity = np.cumsum(values)
         peaks = np.maximum.accumulate(np.maximum(equity, 0.0))
@@ -507,6 +507,7 @@ def _metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "losses": int((gross < 0).sum()),
         "breakeven": int((gross == 0).sum()),
         "win_rate_pct": round(100.0 * float((gross > 0).sum()) / n, 2),
+        "net_win_rate_cost_005_pct": round(100.0 * float((net_005 > 0).sum()) / n, 2),
         "gross_r": round(float(gross.sum()), 4),
         "net_r_cost_000": round(float(net_000.sum()), 4),
         "net_r_cost_005": round(float(net_005.sum()), 4),
@@ -536,6 +537,9 @@ def run_research(
     end: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     prepared = prepare_bars(frame)
+    fetched_bars = len(prepared)
+    fetched_first = prepared.index.min().isoformat()
+    fetched_last = prepared.index.max().isoformat()
     # Apply requested output dates only after indicators have used all earlier history.
     if start:
         prepared = prepared.loc[prepared.index >= pd.Timestamp(start, tz="UTC")]
@@ -563,8 +567,11 @@ def run_research(
         "cost_sensitivity": {"0.00R": "no cost assumption", "0.05R": "assumed round trip cost per trade", "0.10R": "assumed round trip cost per trade"},
         "data": {
             "requested_bars": int(requested_bars),
-            "received_bars": int(len(prepared)),
-            "history_partial": len(prepared) < requested_bars,
+            "fetched_bars": int(fetched_bars),
+            "analysis_bars_after_date_filter": int(len(prepared)),
+            "history_partial": fetched_bars < requested_bars,
+            "fetched_first_bar_utc": fetched_first,
+            "fetched_last_bar_utc": fetched_last,
             "first_bar_utc": prepared.index.min().isoformat(),
             "last_bar_utc": prepared.index.max().isoformat(),
             "rows_per_new_york_day": int(prepared.groupby("ny_date").size().median()),
