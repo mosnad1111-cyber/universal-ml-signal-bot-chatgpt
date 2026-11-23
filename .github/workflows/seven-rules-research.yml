@@ -53,7 +53,8 @@ jobs:
           args=(--bars "$BARS" --out-dir research/results)
           if [[ -n "$START_DATE" ]]; then args+=(--start "$START_DATE"); fi
           if [[ -n "$END_DATE" ]]; then args+=(--end "$END_DATE"); fi
-          python research/seven_rules_research.py "${args[@]}"
+          # Run as a module so project-root imports (config.py, market.py) resolve.
+          python -m research.seven_rules_research "${args[@]}"
       - name: Upload research report and trades
         if: always()
         uses: actions/upload-artifact@v4
