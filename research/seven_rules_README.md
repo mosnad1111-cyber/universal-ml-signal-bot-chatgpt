@@ -8,14 +8,14 @@ signals, score/AI thresholds, risk settings, Telegram scanning, or broker execut
 From the repository root:
 
 ```bash
-python research/seven_rules_research.py --bars 30000
+python -m research.seven_rules_research --bars 30000
 ```
 
 Optional output period (UTC dates; the pre-start history is still used to warm up
 the daily EMA calculation):
 
 ```bash
-python research/seven_rules_research.py --bars 30000 --start 2026-06-01 --end 2026-10-01
+python -m research.seven_rules_research --bars 30000 --start 2026-06-01 --end 2026-10-01
 ```
 
 The script downloads the project's configured 5-minute historical candles:
