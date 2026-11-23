@@ -437,7 +437,7 @@ def _simulate_trade(
     else:
         exit_i = exit_price = result = None
 
-    if "exit_i" not in locals():
+    if exit_i is None:
         if last_session_i is None or frame.iloc[last_session_i]["ny_clock"] < time(15, 45):
             # Do not score an unfinished current session as a completed trade.
             return None
