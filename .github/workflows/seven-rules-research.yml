@@ -1,0 +1,64 @@
+name: Seven-rules Gold + Bitcoin research
+
+on:
+  workflow_dispatch:
+    inputs:
+      bars:
+        description: "Number of 5-minute candles requested per market"
+        required: true
+        type: choice
+        options:
+          - "10000"
+          - "20000"
+          - "30000"
+          - "40000"
+        default: "30000"
+      start_date:
+        description: "Optional inclusive UTC start date (YYYY-MM-DD)"
+        required: false
+        type: string
+      end_date:
+        description: "Optional inclusive UTC end date (YYYY-MM-DD)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seven-rules-research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BARS: ${{ inputs.bars }}
+      START_DATE: ${{ inputs.start_date }}
+      END_DATE: ${{ inputs.end_date }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run independent Gold and Bitcoin tests
+        shell: bash
+        run: |
+          args=(--bars "$BARS" --out-dir research/results)
+          if [[ -n "$START_DATE" ]]; then args+=(--start "$START_DATE"); fi
+          if [[ -n "$END_DATE" ]]; then args+=(--end "$END_DATE"); fi
+          python research/seven_rules_research.py "${args[@]}"
+      - name: Upload research report and trades
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seven-rules-gold-bitcoin-research
+          path: research/results/
+          if-no-files-found: warn
+          retention-days: 30
