@@ -337,6 +337,12 @@ class GoldAI:
             'validation_brier':float(np.mean((pv-yv.to_numpy())**2)),
             'reported_classification_cutoff':default_cutoff,
         }
+        # The pooled metrics compare probabilities across two different conditional
+        # tasks (BUY and SELL). Keep them for traceability, but also publish a
+        # direction-macro view so cross-direction score offsets cannot dominate AUC.
+        metrics['pooled_auc'] = metrics['auc']
+        metrics['pooled_pr_auc'] = metrics['pr_auc']
+        metrics['auc_scope'] = 'pooled_across_buy_sell; interpret_with_directional_metrics'
         # Report threshold sensitivity explicitly; production thresholds are
         # configured separately and must not be implied by this diagnostic grid.
         threshold_grid = (0.30, 0.40, 0.50, 0.60)
@@ -358,13 +364,52 @@ class GoldAI:
             metrics[f'{name}_positive_rate']=float(direction_truth.mean()) if mask.sum() else None
             metrics[f'{name}_baseline_accuracy']=float(max(direction_truth.mean(),1-direction_truth.mean())) if mask.sum() else None
             metrics[f'{name}_pr_auc'] = float(average_precision_score(direction_truth,direction_prob)) if mask.sum() and direction_truth.nunique()==2 else None
+            prevalence = float(direction_truth.mean()) if mask.sum() else None
+            if mask.sum():
+                truth_values = direction_truth.to_numpy(dtype=float)
+                probability_values = np.asarray(direction_prob, dtype=float)
+                brier = float(np.mean((probability_values - truth_values) ** 2))
+                baseline_brier = float(np.mean((truth_values - prevalence) ** 2))
+                metrics[f'{name}_mean_probability'] = float(np.mean(probability_values))
+                metrics[f'{name}_brier'] = brier
+                metrics[f'{name}_brier_baseline'] = baseline_brier
+                metrics[f'{name}_brier_skill'] = (
+                    float(1.0 - brier / baseline_brier) if baseline_brier > 0 else None
+                )
+            else:
+                metrics[f'{name}_mean_probability'] = None
+                metrics[f'{name}_brier'] = None
+                metrics[f'{name}_brier_baseline'] = None
+                metrics[f'{name}_brier_skill'] = None
             for cutoff in threshold_grid:
                 suffix = f'{cutoff:.2f}'.replace('.', '_')
                 direction_pred = (direction_prob >= cutoff).astype(int)
-                metrics[f'{name}_thr_{suffix}_precision'] = float(precision_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
+                threshold_precision = float(precision_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
+                metrics[f'{name}_thr_{suffix}_precision'] = threshold_precision
+                metrics[f'{name}_thr_{suffix}_precision_lift'] = (
+                    float(threshold_precision - prevalence)
+                    if threshold_precision is not None and prevalence is not None else None
+                )
                 metrics[f'{name}_thr_{suffix}_recall'] = float(recall_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
                 metrics[f'{name}_thr_{suffix}_f1'] = float(f1_score(direction_truth,direction_pred,zero_division=0)) if mask.sum() else None
                 metrics[f'{name}_thr_{suffix}_predicted_positive_rate'] = float(np.mean(direction_pred)) if mask.sum() else None
+
+        directional_auc_values = [
+            metrics.get('buy_auc'), metrics.get('sell_auc')
+        ]
+        directional_auc_values = [value for value in directional_auc_values if value is not None]
+        directional_pr_values = [
+            metrics.get('buy_pr_auc'), metrics.get('sell_pr_auc')
+        ]
+        directional_pr_values = [value for value in directional_pr_values if value is not None]
+        metrics['directional_macro_auc'] = (
+            float(np.mean(directional_auc_values)) if directional_auc_values else None
+        )
+        metrics['directional_macro_pr_auc'] = (
+            float(np.mean(directional_pr_values)) if directional_pr_values else None
+        )
+        metrics['directional_auc_sides'] = len(directional_auc_values)
+        metrics['directional_pr_auc_sides'] = len(directional_pr_values)
 
         # Keep the chronological holdout metrics above untouched, but refit the
         # deployment model on every label that is already fully observable at this

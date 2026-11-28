@@ -136,6 +136,22 @@ def scan_audit():
         'scans': scans,
     })
 
+@app.get('/signal-performance')
+def signal_performance():
+    """Authenticated cohorts from actual closed signals, never shadow candidates."""
+    expected = os.getenv('SCAN_AUDIT_TOKEN', '').strip()
+    supplied = request.headers.get('X-Audit-Token', '')
+    if not expected:
+        return jsonify({'status': 'disabled', 'error': 'scan_audit_token_not_configured'}), 503
+    if not hmac.compare_digest(supplied, expected):
+        return jsonify({'status': 'error', 'error': 'unauthorized'}), 401
+    try:
+        limit = max(1, min(int(request.args.get('limit', 10000)), 10000))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'error': 'invalid_limit'}), 400
+    return jsonify({'status': 'ok', **engine.signal_performance_cohorts(limit)})
+
+
 @app.post('/lean-backtest/callback')
 def lean_backtest_callback():
     payload = request.get_json(silent=True) or {}
