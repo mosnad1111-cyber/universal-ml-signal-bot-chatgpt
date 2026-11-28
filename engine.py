@@ -500,6 +500,66 @@ class Engine:
             ),
         )
 
+    @staticmethod
+    def _performance_cross_cohorts(trades, score_bands, ai_bands):
+        """Group closed signals by joint Score x AI band, keeping symbol/timeframe/side separate."""
+        def find_band(raw, bands):
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return None
+            if not pd.notna(value) or value in (float('inf'), float('-inf')):
+                return None
+            for label, lower, upper in bands:
+                if value >= lower and (upper is None or value < upper):
+                    return label
+            return None
+
+        grouped = {}
+        for row in trades:
+            score_band = find_band(row.get('score'), score_bands)
+            ai_band = find_band(row.get('ai_prob'), ai_bands)
+            if score_band is None or ai_band is None:
+                continue
+            key = (
+                str(row.get('symbol') or ''),
+                str(row.get('timeframe') or ''),
+                str(row.get('direction') or ''),
+                score_band,
+                ai_band,
+            )
+            grouped.setdefault(key, []).append(row)
+
+        score_order = {label: index for index, (label, _, _) in enumerate(score_bands)}
+        ai_order = {label: index for index, (label, _, _) in enumerate(ai_bands)}
+        results = []
+        for (symbol, timeframe, direction, score_band, ai_band), members in grouped.items():
+            summary = Engine._performance_summary(members)
+            pf = summary['profit_factor']
+            results.append({
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'direction': direction,
+                'score_band': score_band,
+                'ai_band': ai_band,
+                'trades': summary['trades'],
+                'wins': summary['wins'],
+                'losses': summary['losses'],
+                'flats': summary['flats'],
+                'win_rate_pct': summary['win_rate'],
+                'net_r': summary['net_r'],
+                'expectancy_r': summary['expectancy'],
+                'profit_factor': None if pf == float('inf') else pf,
+                'profit_factor_infinite': pf == float('inf'),
+                'small_sample': summary['trades'] < 20,
+            })
+        return sorted(
+            results,
+            key=lambda row: (
+                row['symbol'], row['timeframe'], row['direction'],
+                score_order[row['score_band']], ai_order[row['ai_band']],
+            ),
+        )
     def signal_performance_cohorts(self, limit=10000):
         """Actual closed-signal results grouped by stored AI probability and Score."""
         limit = max(1, min(int(limit), 10000))
@@ -528,13 +588,20 @@ class Engine:
             ('70–75', 70.0, 75.0),
             ('75+', 75.0, None),
         )
+        ai_cohorts = self._performance_cohorts(trades, 'ai_prob', ai_bands)
+        score_cohorts = self._performance_cohorts(trades, 'score', score_bands)
+        joint_cohorts = self._performance_cross_cohorts(trades, score_bands, ai_bands)
+        joint_covered = sum(row['trades'] for row in joint_cohorts)
         return {
             'source': 'closed_signals_ledger_not_scan_audit_shadow',
             'records_examined': len(recent),
             'closed_records': len(closed_rows),
             'closed_trades_with_valid_r': len(trades),
-            'ai_probability_bands': self._performance_cohorts(trades, 'ai_prob', ai_bands),
-            'score_bands': self._performance_cohorts(trades, 'score', score_bands),
+            'ai_probability_bands': ai_cohorts,
+            'score_bands': score_cohorts,
+            'score_ai_joint_cohorts': joint_cohorts,
+            'score_ai_joint_covered_records': joint_covered,
+            'score_ai_joint_missing_metadata_records': len(trades) - joint_covered,
         }
 
     def stats_text(self):
