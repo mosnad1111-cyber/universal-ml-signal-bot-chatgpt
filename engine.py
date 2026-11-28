@@ -706,6 +706,40 @@ class Engine:
             if not shown_cohorts:
                 lines.append('  لا توجد مجموعات AI تضم ثلاث صفقات مغلقة على الأقل.')
 
+            score_bands = (
+                ('<60', 0.0, 60.0), ('60–65', 60.0, 65.0),
+                ('65–70', 65.0, 70.0), ('70–75', 70.0, 75.0),
+                ('75+', 75.0, None),
+            )
+            joint_cohorts = self._performance_cross_cohorts(trades, score_bands, ai_bands)
+            joint_covered = sum(row['trades'] for row in joint_cohorts)
+            lines.append('\n🧩 <b>نتائج تقاطع Score × AI للصفقات المغلقة</b>')
+            lines.append(
+                '  تغطية التقاطع: {}/{} صفقة؛ بيانات Score أو AI غير المتاحة: {}.'.format(
+                    joint_covered, len(trades), len(trades) - joint_covered
+                )
+            )
+            shown_joint = 0
+            for tf in TIMEFRAMES:
+                for direction in ('BUY', 'SELL'):
+                    for cohort in joint_cohorts:
+                        if cohort['timeframe'] != tf or cohort['direction'] != direction or cohort['trades'] < 3:
+                            continue
+                        label = 'شراء' if direction == 'BUY' else 'بيع'
+                        warning = ' ⚠️ عينة صغيرة' if cohort['small_sample'] else ''
+                        pf_text = '∞' if cohort['profit_factor_infinite'] else format(cohort['profit_factor'], '.2f')
+                        lines.append(
+                            '  {} {} Score {} × AI {}: n={} | WR {:.1f}% | R {:+.2f} | Exp {:+.3f} | PF {}{}'.format(
+                                tf, label, cohort['score_band'], cohort['ai_band'],
+                                cohort['trades'], cohort['win_rate_pct'], cohort['net_r'],
+                                cohort['expectancy_r'], pf_text, warning
+                            )
+                        )
+                        shown_joint += 1
+            if not shown_joint:
+                lines.append('  لا توجد مجموعات مشتركة تضم ثلاث صفقات مغلقة على الأقل.')
+            lines.append('  التفاصيل الكاملة، بما فيها المجموعات الأصغر، متاحة في بيانات /signal-performance.')
+
             lines.append('\n🧠 <b>تشخيص جودة نموذج AI حسب الفريم والاتجاه</b>')
             metrics = ai.info()
             for tf in TIMEFRAMES:
