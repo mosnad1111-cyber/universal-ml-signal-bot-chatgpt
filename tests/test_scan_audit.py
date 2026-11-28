@@ -64,6 +64,33 @@ class ScanAuditIntegrityTests(unittest.TestCase):
         self.assertEqual(summary[0]["buy_tp"], 1)
         self.assertEqual(summary[0]["sell_sl"], 1)
 
+
+    def test_legacy_candidate_geometry_is_not_backfilled_with_later_scan_scores(self):
+        sample = self.sample("legacy", 61.0)
+        sample["shadow_candidates"]["BUY"]["ai_prob"] = None
+        sample["shadow_candidates"]["BUY"]["score"] = None
+        self.db.record_scan_event(sample)
+
+        # Simulate a pre-migration row: geometry exists, candidate-specific
+        # metadata columns were added later and are still NULL.
+        with self.db._conn() as conn:
+            conn.execute(
+                "UPDATE scan_audit SET buy_candidate_ai=NULL, buy_candidate_score=NULL WHERE candle_time=?",
+                ("2026-11-22T10:00:00",),
+            )
+
+        newer = self.sample("rescan", 69.0)
+        newer["buy_ai"] = 0.48
+        newer["shadow_candidates"]["BUY"]["ai_prob"] = 0.48
+        newer["shadow_candidates"]["BUY"]["score"] = 69.0
+        self.db.record_scan_event(newer)
+
+        row = self.db.scan_audit_page(limit=10)[0]
+        self.assertEqual(row["buy_entry"], 101.0)
+        self.assertEqual(row["buy_score"], 69.0)  # latest scan telemetry
+        self.assertIsNone(row["buy_candidate_ai"])
+        self.assertIsNone(row["buy_candidate_score"])
+
     def test_legacy_duplicate_rows_are_deduplicated_on_migration(self):
         import sqlite3
         legacy_path = os.path.join(self.tmp.name, "legacy.sqlite3")
