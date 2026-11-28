@@ -89,6 +89,7 @@ class DetailedStatisticsTests(unittest.TestCase):
         self.assertIn("AUC مجمّع", report)
         self.assertIn("AUC متوسط اتجاهي", report)
         self.assertIn("نتائج الصفقات الفعلية حسب نطاق AI", report)
+        self.assertIn("نتائج تقاطع Score × AI", report)
         self.assertIn("قبل السبريد والانزلاق", report)
 
     def test_real_closed_signal_cohorts_are_split_by_direction_and_ai_band(self):
@@ -137,6 +138,48 @@ class DetailedStatisticsTests(unittest.TestCase):
         )
         self.assertEqual(sell_score["trades"], 1)
         self.assertTrue(sell_score["small_sample"])
+        joint = next(
+            row for row in report["score_ai_joint_cohorts"]
+            if row["direction"] == "BUY"
+            and row["score_band"] == "65–70"
+            and row["ai_band"] == "30–40%"
+        )
+        self.assertEqual(joint["trades"], 2)
+        self.assertEqual(joint["wins"], 1)
+        self.assertAlmostEqual(joint["net_r"], 1.0)
+        self.assertEqual(report["score_ai_joint_covered_records"], 3)
+        self.assertEqual(report["score_ai_joint_missing_metadata_records"], 0)
+
+    def test_joint_score_ai_cohorts_do_not_mix_symbols_timeframes_or_directions(self):
+        base = {
+            "entry": 100, "sl": 90, "tp": 120, "score": 67, "ai_prob": 0.35,
+            "status": "CLOSED", "result": "TP", "close_price": 120,
+            "closed_at": "2026-11-01T00:00:00+00:00",
+        }
+        rows = [
+            {**base, "id": 1, "symbol": ASSETS["GOLD"]["symbol"], "timeframe": "5m", "direction": "BUY"},
+            {**base, "id": 2, "symbol": ASSETS["GOLD"]["symbol"], "timeframe": "5m", "direction": "BUY"},
+            {**base, "id": 3, "symbol": ASSETS["BTC"]["symbol"], "timeframe": "5m", "direction": "BUY"},
+            {**base, "id": 4, "symbol": ASSETS["GOLD"]["symbol"], "timeframe": "15m", "direction": "BUY"},
+            {**base, "id": 5, "symbol": ASSETS["GOLD"]["symbol"], "timeframe": "5m", "direction": "SELL"},
+            {**base, "id": 6, "symbol": ASSETS["GOLD"]["symbol"], "timeframe": "5m", "direction": "BUY", "score": None},
+        ]
+        engine = Engine.__new__(Engine)
+        engine.db = FakeDB(rows)
+        report = engine.signal_performance_cohorts()
+        self.assertEqual(report["score_ai_joint_covered_records"], 5)
+        self.assertEqual(report["score_ai_joint_missing_metadata_records"], 1)
+        self.assertEqual(len(report["score_ai_joint_cohorts"]), 4)
+        self.assertEqual(
+            {(row["symbol"], row["timeframe"], row["direction"])
+             for row in report["score_ai_joint_cohorts"]},
+            {
+                (ASSETS["GOLD"]["symbol"], "5m", "BUY"),
+                (ASSETS["BTC"]["symbol"], "5m", "BUY"),
+                (ASSETS["GOLD"]["symbol"], "15m", "BUY"),
+                (ASSETS["GOLD"]["symbol"], "5m", "SELL"),
+            },
+        )
 
 
 if __name__ == "__main__":
