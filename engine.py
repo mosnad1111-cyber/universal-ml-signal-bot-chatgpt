@@ -447,6 +447,96 @@ class Engine:
             adjusted.append(item)
         return Engine._performance_summary(adjusted)
 
+    @staticmethod
+    def _performance_cohorts(trades, field, bands):
+        """Group real closed signals by a stored confidence/score band."""
+        grouped = {}
+        for row in trades:
+            raw = row.get(field)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if not pd.notna(value):
+                continue
+            band_label = None
+            for label, lower, upper in bands:
+                if value >= lower and (upper is None or value < upper):
+                    band_label = label
+                    break
+            if band_label is None:
+                continue
+            key = (
+                str(row.get('symbol') or ''),
+                str(row.get('timeframe') or ''),
+                str(row.get('direction') or ''),
+                band_label,
+            )
+            grouped.setdefault(key, []).append(row)
+
+        results = []
+        for (symbol, timeframe, direction, band), members in grouped.items():
+            summary = Engine._performance_summary(members)
+            pf = summary['profit_factor']
+            results.append({
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'direction': direction,
+                'band': band,
+                'trades': summary['trades'],
+                'wins': summary['wins'],
+                'losses': summary['losses'],
+                'win_rate_pct': summary['win_rate'],
+                'net_r': summary['net_r'],
+                'expectancy_r': summary['expectancy'],
+                'profit_factor': None if pf == float('inf') else pf,
+                'profit_factor_infinite': pf == float('inf'),
+                'small_sample': summary['trades'] < 20,
+            })
+        return sorted(
+            results,
+            key=lambda row: (
+                row['symbol'], row['timeframe'], row['direction'], row['band']
+            ),
+        )
+
+    def signal_performance_cohorts(self, limit=10000):
+        """Actual closed-signal results grouped by stored AI probability and Score."""
+        limit = max(1, min(int(limit), 10000))
+        recent = [dict(row) for row in self.db.recent(limit)]
+        closed_rows = [row for row in recent if row.get('status') == 'CLOSED']
+        trades = []
+        for row in closed_rows:
+            realized = self._realized_r(row)
+            if realized is None or not pd.notna(realized):
+                continue
+            item = dict(row)
+            item['_r'] = float(realized)
+            trades.append(item)
+
+        ai_bands = (
+            ('<30%', 0.0, 0.30),
+            ('30–40%', 0.30, 0.40),
+            ('40–50%', 0.40, 0.50),
+            ('50–60%', 0.50, 0.60),
+            ('60%+', 0.60, None),
+        )
+        score_bands = (
+            ('<60', 0.0, 60.0),
+            ('60–65', 60.0, 65.0),
+            ('65–70', 65.0, 70.0),
+            ('70–75', 70.0, 75.0),
+            ('75+', 75.0, None),
+        )
+        return {
+            'source': 'closed_signals_ledger_not_scan_audit_shadow',
+            'records_examined': len(recent),
+            'closed_records': len(closed_rows),
+            'closed_trades_with_valid_r': len(trades),
+            'ai_probability_bands': self._performance_cohorts(trades, 'ai_prob', ai_bands),
+            'score_bands': self._performance_cohorts(trades, 'score', score_bands),
+        }
+
     def stats_text(self):
         # The report deliberately uses only the most recent 10,000 stored signal
         # records and excludes WAITING/ACTIVE/CANCELLED rows from performance.
@@ -525,6 +615,30 @@ class Engine:
                     if len(directional) < 20:
                         lines.append('    ⚠️ عينة صغيرة؛ لا يُعتمد عليها وحدها لتغيير شروط التداول.')
 
+            ai_bands = (
+                ('<30%', 0.0, 0.30), ('30–40%', 0.30, 0.40),
+                ('40–50%', 0.40, 0.50), ('50–60%', 0.50, 0.60),
+                ('60%+', 0.60, None),
+            )
+            ai_cohorts = self._performance_cohorts(trades, 'ai_prob', ai_bands)
+            lines.append('\n🧪 <b>نتائج الصفقات الفعلية حسب نطاق AI</b>')
+            shown_cohorts = 0
+            for tf in TIMEFRAMES:
+                for direction in ('BUY', 'SELL'):
+                    for cohort in ai_cohorts:
+                        if cohort['timeframe'] != tf or cohort['direction'] != direction or cohort['trades'] < 3:
+                            continue
+                        label = 'شراء' if direction == 'BUY' else 'بيع'
+                        warning = ' ⚠️ عينة صغيرة' if cohort['small_sample'] else ''
+                        lines.append(
+                            f"  {tf} {label} AI {cohort['band']}: n={cohort['trades']} | "
+                            f"WR {cohort['win_rate_pct']:.1f}% | R {cohort['net_r']:+.2f} | "
+                            f"Exp {cohort['expectancy_r']:+.3f}{warning}"
+                        )
+                        shown_cohorts += 1
+            if not shown_cohorts:
+                lines.append('  لا توجد مجموعات AI تضم ثلاث صفقات مغلقة على الأقل.')
+
             lines.append('\n🧠 <b>تشخيص جودة نموذج AI حسب الفريم والاتجاه</b>')
             metrics = ai.info()
             for tf in TIMEFRAMES:
@@ -538,9 +652,11 @@ class Engine:
                 training_rows = int(value.get('training_rows', 0) or 0)
                 deployment_rows = int(value.get('deployment_training_rows', training_rows) or 0)
                 lines.append(
-                    f"{tf}: {value.get('engine', '-')} | AUC {metric_text('auc')} | "
-                    f"Accuracy {metric_text('accuracy')} | Precision {metric_text('precision')} | "
-                    f"Recall {metric_text('recall')} | PR-AUC {metric_text('pr_auc')} | "
+                    f"{tf}: {value.get('engine', '-')} | AUC مجمّع {metric_text('auc')} | "
+                    f"AUC متوسط اتجاهي {metric_text('directional_macro_auc')} | "
+                    f"Accuracy مجمّع {metric_text('accuracy')} | Precision {metric_text('precision')} | "
+                    f"Recall {metric_text('recall')} | PR-AUC مجمّع {metric_text('pr_auc')} | "
+                    f"PR-AUC متوسط اتجاهي {metric_text('directional_macro_pr_auc')} | "
                     f"تدريب للتحقق {training_rows:,} | إعادة تدريب نهائية {deployment_rows:,}"
                 )
                 if value.get('validation_rows') is not None:
@@ -557,12 +673,18 @@ class Engine:
                         f"إيجابي {float(value.get(prefix+'_positive_rate') or 0.0)*100:.1f}% | "
                         f"خط أساس {float(value.get(prefix+'_baseline_accuracy') or 0.0)*100:.1f}% | "
                         f"Precision@0.50 {metric_text(prefix+'_thr_0_50_precision')} | "
-                        f"Recall@0.50 {metric_text(prefix+'_thr_0_50_recall')} | PR-AUC {metric_text(prefix+'_pr_auc')}"
+                        f"Recall@0.50 {metric_text(prefix+'_thr_0_50_recall')} | "
+                        f"PR-AUC {metric_text(prefix+'_pr_auc')} | "
+                        f"Brier {metric_text(prefix+'_brier')} | "
+                        f"Brier Skill {metric_text(prefix+'_brier_skill')}"
                     )
                     for cutoff in (0.30, 0.40, 0.50, 0.60):
                         suffix = f'{cutoff:.2f}'.replace('.', '_')
+                        lift = value.get(prefix+'_thr_'+suffix+'_precision_lift')
+                        lift_text = f"{float(lift)*100:+.1f} نقطة مئوية" if lift is not None else '—'
                         lines.append(
-                            f"    عتبة {cutoff:.0%}: Precision {metric_text(prefix+'_thr_'+suffix+'_precision')} | "
+                            f"    عتبة {cutoff:.0%}: Precision {metric_text(prefix+'_thr_'+suffix+'_precision')} "
+                            f"(فرق عن معدل الإيجابية {lift_text}) | "
                             f"Recall {metric_text(prefix+'_thr_'+suffix+'_recall')} | "
                             f"F1 {metric_text(prefix+'_thr_'+suffix+'_f1')} | "
                             f"توقع إيجابي {float(value.get(prefix+'_thr_'+suffix+'_predicted_positive_rate') or 0.0)*100:.1f}%"
