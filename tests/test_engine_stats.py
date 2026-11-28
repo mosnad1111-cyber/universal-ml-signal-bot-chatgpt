@@ -86,7 +86,57 @@ class DetailedStatisticsTests(unittest.TestCase):
         self.assertIn("شراء", report)
         self.assertIn("بيع", report)
         self.assertIn("AUC BUY", report)
+        self.assertIn("AUC مجمّع", report)
+        self.assertIn("AUC متوسط اتجاهي", report)
+        self.assertIn("نتائج الصفقات الفعلية حسب نطاق AI", report)
         self.assertIn("قبل السبريد والانزلاق", report)
+
+    def test_real_closed_signal_cohorts_are_split_by_direction_and_ai_band(self):
+        gold = ASSETS["GOLD"]["symbol"]
+        rows = [
+            {
+                "id": 1, "symbol": gold, "timeframe": "5m", "direction": "BUY",
+                "entry": 100, "sl": 90, "tp": 120, "score": 66, "ai_prob": 0.34,
+                "status": "CLOSED", "result": "TP", "close_price": 120,
+                "closed_at": "2026-11-01T00:00:00+00:00",
+            },
+            {
+                "id": 2, "symbol": gold, "timeframe": "5m", "direction": "BUY",
+                "entry": 100, "sl": 90, "tp": 120, "score": 67, "ai_prob": 0.38,
+                "status": "CLOSED", "result": "SL", "close_price": 90,
+                "closed_at": "2026-11-02T00:00:00+00:00",
+            },
+            {
+                "id": 3, "symbol": gold, "timeframe": "5m", "direction": "SELL",
+                "entry": 100, "sl": 110, "tp": 80, "score": 72, "ai_prob": 0.64,
+                "status": "CLOSED", "result": "TP", "close_price": 80,
+                "closed_at": "2026-11-03T00:00:00+00:00",
+            },
+            {
+                "id": 4, "symbol": gold, "timeframe": "5m", "direction": "SELL",
+                "entry": 100, "sl": 110, "tp": 80, "score": 72, "ai_prob": 0.64,
+                "status": "WAITING", "result": None, "close_price": None,
+                "closed_at": None,
+            },
+        ]
+        engine = Engine.__new__(Engine)
+        engine.db = FakeDB(rows)
+        report = engine.signal_performance_cohorts()
+        self.assertEqual(report["closed_records"], 3)
+        self.assertEqual(report["closed_trades_with_valid_r"], 3)
+        buy = next(
+            row for row in report["ai_probability_bands"]
+            if row["direction"] == "BUY" and row["band"] == "30–40%"
+        )
+        self.assertEqual(buy["trades"], 2)
+        self.assertEqual(buy["wins"], 1)
+        self.assertAlmostEqual(buy["net_r"], 1.0)
+        sell_score = next(
+            row for row in report["score_bands"]
+            if row["direction"] == "SELL" and row["band"] == "70–75"
+        )
+        self.assertEqual(sell_score["trades"], 1)
+        self.assertTrue(sell_score["small_sample"])
 
 
 if __name__ == "__main__":
