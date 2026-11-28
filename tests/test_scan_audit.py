@@ -27,19 +27,29 @@ class ScanAuditIntegrityTests(unittest.TestCase):
             "context_trend": -1,
             "scan_marker": scanned_marker,
             "shadow_candidates": {
-                "BUY": {"entry": 101.0, "sl": 99.0, "tp": 105.0},
-                "SELL": {"entry": 100.0, "sl": 102.0, "tp": 96.0},
+                "BUY": {"entry": 101.0, "sl": 99.0, "tp": 105.0, "ai_prob": 0.31, "score": score},
+                "SELL": {"entry": 100.0, "sl": 102.0, "tp": 96.0, "ai_prob": 0.62, "score": 71.0},
             },
         }
 
     def test_same_candle_is_upserted_not_duplicated(self):
         self.db.record_scan_event(self.sample("first", 61.0))
-        self.db.record_scan_event(self.sample("second", 62.0))
+        second = self.sample("second", 62.0)
+        second["buy_ai"] = 0.35
+        second["shadow_candidates"]["BUY"]["ai_prob"] = 0.35
+        self.db.record_scan_event(second)
         rows = self.db.scan_audit_page(limit=100)
         self.assertEqual(len(rows), 1)
+        # General scan telemetry reflects the latest rescan.
         self.assertEqual(rows[0]["buy_score"], 62.0)
+        self.assertEqual(rows[0]["buy_ai"], 0.35)
+        # Candidate geometry and its AI/Score snapshot remain from the same
+        # original candidate that is later resolved to TP/SL.
         self.assertEqual(rows[0]["buy_entry"], 101.0)
+        self.assertEqual(rows[0]["buy_candidate_ai"], 0.31)
+        self.assertEqual(rows[0]["buy_candidate_score"], 61.0)
         self.assertEqual(rows[0]["sell_tp"], 96.0)
+        self.assertEqual(rows[0]["sell_candidate_ai"], 0.62)
 
     def test_shadow_outcomes_resolve_and_summary_counts_them(self):
         self.db.record_scan_event(self.sample("first", 61.0))
