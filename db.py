@@ -116,12 +116,14 @@ class DB:
                 buy_ai REAL, sell_ai REAL, buy_score REAL, sell_score REAL, context_trend INTEGER,
                 diagnostics_json TEXT NOT NULL,
                 buy_entry REAL, buy_sl REAL, buy_tp REAL, sell_entry REAL, sell_sl REAL, sell_tp REAL,
-                buy_outcome TEXT, sell_outcome TEXT, buy_evaluated_bars INTEGER DEFAULT 0, sell_evaluated_bars INTEGER DEFAULT 0);
+                buy_outcome TEXT, sell_outcome TEXT, buy_evaluated_bars INTEGER DEFAULT 0, sell_evaluated_bars INTEGER DEFAULT 0,
+                buy_candidate_ai REAL, buy_candidate_score REAL,
+                sell_candidate_ai REAL, sell_candidate_score REAL);
                 CREATE INDEX IF NOT EXISTS idx_scan_audit_symbol_tf_time ON scan_audit(symbol,timeframe,scanned_at);
                 CREATE INDEX IF NOT EXISTS idx_scan_audit_scanned_at ON scan_audit(scanned_at);"""
             )
             audit_cols = {r[1] for r in c.execute("PRAGMA table_info(scan_audit)")}
-            for col, typ in (("buy_entry","REAL"),("buy_sl","REAL"),("buy_tp","REAL"),("sell_entry","REAL"),("sell_sl","REAL"),("sell_tp","REAL"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0")):
+            for col, typ in (("buy_entry","REAL"),("buy_sl","REAL"),("buy_tp","REAL"),("sell_entry","REAL"),("sell_sl","REAL"),("sell_tp","REAL"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0"),("buy_candidate_ai","REAL"),("buy_candidate_score","REAL"),("sell_candidate_ai","REAL"),("sell_candidate_score","REAL")):
                 if col not in audit_cols:
                     c.execute(f"ALTER TABLE scan_audit ADD COLUMN {col} {typ}")
             c.execute("UPDATE scan_audit SET candle_time='' WHERE candle_time IS NULL")
@@ -201,9 +203,11 @@ class DB:
                 buy_entry DOUBLE PRECISION, buy_sl DOUBLE PRECISION, buy_tp DOUBLE PRECISION,
                 sell_entry DOUBLE PRECISION, sell_sl DOUBLE PRECISION, sell_tp DOUBLE PRECISION,
                 buy_outcome TEXT, sell_outcome TEXT, buy_evaluated_bars INTEGER DEFAULT 0,
-                sell_evaluated_bars INTEGER DEFAULT 0
+                sell_evaluated_bars INTEGER DEFAULT 0,
+                buy_candidate_ai DOUBLE PRECISION, buy_candidate_score DOUBLE PRECISION,
+                sell_candidate_ai DOUBLE PRECISION, sell_candidate_score DOUBLE PRECISION
             )""")
-            for col, typ in (("buy_entry","DOUBLE PRECISION"),("buy_sl","DOUBLE PRECISION"),("buy_tp","DOUBLE PRECISION"),("sell_entry","DOUBLE PRECISION"),("sell_sl","DOUBLE PRECISION"),("sell_tp","DOUBLE PRECISION"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0")):
+            for col, typ in (("buy_entry","DOUBLE PRECISION"),("buy_sl","DOUBLE PRECISION"),("buy_tp","DOUBLE PRECISION"),("sell_entry","DOUBLE PRECISION"),("sell_sl","DOUBLE PRECISION"),("sell_tp","DOUBLE PRECISION"),("buy_outcome","TEXT"),("sell_outcome","TEXT"),("buy_evaluated_bars","INTEGER DEFAULT 0"),("sell_evaluated_bars","INTEGER DEFAULT 0"),("buy_candidate_ai","DOUBLE PRECISION"),("buy_candidate_score","DOUBLE PRECISION"),("sell_candidate_ai","DOUBLE PRECISION"),("sell_candidate_score","DOUBLE PRECISION")):
                 c.execute(f"ALTER TABLE scan_audit ADD COLUMN IF NOT EXISTS {col} {typ}")
             c.execute("UPDATE scan_audit SET candle_time='' WHERE candle_time IS NULL")
             c.execute("DELETE FROM scan_audit a USING scan_audit b WHERE a.symbol=b.symbol AND a.timeframe=b.timeframe AND a.candle_time=b.candle_time AND a.id < b.id")
@@ -247,11 +251,14 @@ class DB:
             int(diagnostic.get("context_trend", 0) or 0), payload,
             buy.get("entry"), buy.get("sl"), buy.get("tp"),
             sell.get("entry"), sell.get("sl"), sell.get("tp"),
+            buy.get("ai_prob"), buy.get("score"),
+            sell.get("ai_prob"), sell.get("score"),
         )
         columns = """symbol,timeframe,candle_time,scanned_at,best_direction,reject_reason,
             buy_ai,sell_ai,buy_score,sell_score,context_trend,diagnostics_json,
-            buy_entry,buy_sl,buy_tp,sell_entry,sell_sl,sell_tp"""
-        placeholders = ",".join(["?"] * 18)
+            buy_entry,buy_sl,buy_tp,sell_entry,sell_sl,sell_tp,
+            buy_candidate_ai,buy_candidate_score,sell_candidate_ai,sell_candidate_score"""
+        placeholders = ",".join(["?"] * 22)
         updates = """scanned_at=excluded.scanned_at,best_direction=excluded.best_direction,
             reject_reason=excluded.reject_reason,buy_ai=excluded.buy_ai,sell_ai=excluded.sell_ai,
             buy_score=excluded.buy_score,sell_score=excluded.sell_score,
@@ -259,7 +266,11 @@ class DB:
             buy_entry=COALESCE(scan_audit.buy_entry,excluded.buy_entry),
             buy_sl=COALESCE(scan_audit.buy_sl,excluded.buy_sl),buy_tp=COALESCE(scan_audit.buy_tp,excluded.buy_tp),
             sell_entry=COALESCE(scan_audit.sell_entry,excluded.sell_entry),
-            sell_sl=COALESCE(scan_audit.sell_sl,excluded.sell_sl),sell_tp=COALESCE(scan_audit.sell_tp,excluded.sell_tp)"""
+            sell_sl=COALESCE(scan_audit.sell_sl,excluded.sell_sl),sell_tp=COALESCE(scan_audit.sell_tp,excluded.sell_tp),
+            buy_candidate_ai=COALESCE(scan_audit.buy_candidate_ai,excluded.buy_candidate_ai),
+            buy_candidate_score=COALESCE(scan_audit.buy_candidate_score,excluded.buy_candidate_score),
+            sell_candidate_ai=COALESCE(scan_audit.sell_candidate_ai,excluded.sell_candidate_ai),
+            sell_candidate_score=COALESCE(scan_audit.sell_candidate_score,excluded.sell_candidate_score)"""
         with self.lock, self._conn() as c:
             self._execute(c, f"INSERT INTO scan_audit({columns}) VALUES({placeholders}) ON CONFLICT(symbol,timeframe,candle_time) DO UPDATE SET {updates}", values)
             cleanup = self._execute(c, "SELECT value FROM settings WHERE key=?", ("scan_audit_cleanup_at",)).fetchone()
