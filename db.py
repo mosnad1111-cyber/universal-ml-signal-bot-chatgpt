@@ -267,10 +267,18 @@ class DB:
             buy_sl=COALESCE(scan_audit.buy_sl,excluded.buy_sl),buy_tp=COALESCE(scan_audit.buy_tp,excluded.buy_tp),
             sell_entry=COALESCE(scan_audit.sell_entry,excluded.sell_entry),
             sell_sl=COALESCE(scan_audit.sell_sl,excluded.sell_sl),sell_tp=COALESCE(scan_audit.sell_tp,excluded.sell_tp),
-            buy_candidate_ai=COALESCE(scan_audit.buy_candidate_ai,excluded.buy_candidate_ai),
-            buy_candidate_score=COALESCE(scan_audit.buy_candidate_score,excluded.buy_candidate_score),
-            sell_candidate_ai=COALESCE(scan_audit.sell_candidate_ai,excluded.sell_candidate_ai),
-            sell_candidate_score=COALESCE(scan_audit.sell_candidate_score,excluded.sell_candidate_score)"""
+            buy_candidate_ai=CASE WHEN scan_audit.buy_entry IS NULL
+                THEN COALESCE(scan_audit.buy_candidate_ai,excluded.buy_candidate_ai)
+                ELSE scan_audit.buy_candidate_ai END,
+            buy_candidate_score=CASE WHEN scan_audit.buy_entry IS NULL
+                THEN COALESCE(scan_audit.buy_candidate_score,excluded.buy_candidate_score)
+                ELSE scan_audit.buy_candidate_score END,
+            sell_candidate_ai=CASE WHEN scan_audit.sell_entry IS NULL
+                THEN COALESCE(scan_audit.sell_candidate_ai,excluded.sell_candidate_ai)
+                ELSE scan_audit.sell_candidate_ai END,
+            sell_candidate_score=CASE WHEN scan_audit.sell_entry IS NULL
+                THEN COALESCE(scan_audit.sell_candidate_score,excluded.sell_candidate_score)
+                ELSE scan_audit.sell_candidate_score END"""
         with self.lock, self._conn() as c:
             self._execute(c, f"INSERT INTO scan_audit({columns}) VALUES({placeholders}) ON CONFLICT(symbol,timeframe,candle_time) DO UPDATE SET {updates}", values)
             cleanup = self._execute(c, "SELECT value FROM settings WHERE key=?", ("scan_audit_cleanup_at",)).fetchone()
